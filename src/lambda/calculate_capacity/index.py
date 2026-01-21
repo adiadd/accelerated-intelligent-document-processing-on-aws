@@ -207,16 +207,28 @@ def generate_rpm_quota_codes(model_ids):
         raise ValueError("BEDROCK_MODEL_RPM_QUOTA_CODES must be valid JSON")
     
     for model_id in model_ids:
+        # First try exact match
+        if model_id in rpm_mapping:
+            rpm_quotas[model_id] = rpm_mapping[model_id]
+            continue
+            
         # Clean model ID by removing region prefix and version suffixes
         clean_model_id = model_id.lower()
         if '.' in clean_model_id:
             clean_model_id = clean_model_id.split('.', 2)[-1]  # Remove region prefix like "us." or "eu."
         clean_model_id = clean_model_id.split(':')[0]  # Remove version suffix like ":1m"
         
-        # Extract model type from cleaned model ID
+        # Try to match against cleaned mapping keys
         matched = False
         for model_type, quota_code in rpm_mapping.items():
-            if model_type in clean_model_id:
+            # Clean the mapping key the same way for comparison
+            clean_mapping_key = model_type.lower()
+            if '.' in clean_mapping_key:
+                clean_mapping_key = clean_mapping_key.split('.', 2)[-1]
+            clean_mapping_key = clean_mapping_key.split(':')[0]
+            
+            # Match if the cleaned keys are equal or one contains the other
+            if clean_model_id == clean_mapping_key or clean_model_id in clean_mapping_key or clean_mapping_key in clean_model_id:
                 rpm_quotas[model_id] = quota_code
                 matched = True
                 break
