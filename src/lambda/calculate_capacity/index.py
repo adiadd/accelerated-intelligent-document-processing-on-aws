@@ -413,19 +413,18 @@ def calculate_latency_distribution(
     document_configs=None,
 ):
     """
-    Calculate latency distribution using Excel spreadsheet approach.
-    Simulates document processing backlog over time to find maximum queue delay.
+    Calculate latency distribution using simplified approach.
+    Quota capacity determines processing speed - insufficient quota causes throttling and delays.
     """
 
-    # Excel approach: max_allowed_latency is already in minutes
+    # max_allowed_latency is in minutes
     max_allowed_minutes = max_allowed_latency
 
-    # Get processing capacity from quotas (calculated dynamically)
+    # Get processing capacity from quotas
     bedrock_quota_tpm = quotas.get("bedrock", int(os.environ["DEFAULT_BEDROCK_TPM"]))
     bedrock_quota_rpm = quotas.get("bedrock_models_rpm", {})
     
     # Calculate effective processing capacity
-    # Calculate average tokens per request dynamically from token usage
     total_tokens = sum(tokens_per_hour.values()) if isinstance(tokens_per_hour, dict) else tokens_per_hour
     avg_tokens_per_request = max(total_tokens / max(docs_per_hour, 1), int(os.environ["MIN_TOKENS_PER_REQUEST"]))
     
@@ -438,27 +437,19 @@ def calculate_latency_distribution(
     # Convert hourly demand to per-minute
     docs_per_minute = docs_per_hour / 60
     
-    # Simulate backlog accumulation (configurable approach)
-    # Peak demand multiplier from environment
-    peak_demand_multiplier = float(os.environ["PEAK_DEMAND_MULTIPLIER"])
-    peak_docs_per_minute = docs_per_minute * peak_demand_multiplier
-    
-    # Calculate maximum backlog
-    if peak_docs_per_minute > effective_capacity:
-        # Backlog accumulates when demand exceeds capacity
-        excess_demand = peak_docs_per_minute - effective_capacity
-        # Peak duration from environment
-        peak_duration_minutes = float(os.environ["PEAK_DURATION_MINUTES"])
-        max_backlog_docs = excess_demand * peak_duration_minutes
-        
-        # Time to clear the backlog
-        queue_latency_minutes = max_backlog_docs / effective_capacity
-        bottleneck_services = [f"Bedrock Capacity ({peak_docs_per_minute/effective_capacity:.1%} peak utilization)"]
+    # Simple capacity check: if demand exceeds capacity, we get delays
+    if docs_per_minute > effective_capacity:
+        # Processing is bottlenecked by quota limits
+        utilization = docs_per_minute / effective_capacity
+        # Queue builds up when demand exceeds capacity
+        queue_latency_minutes = (docs_per_minute - effective_capacity) / effective_capacity * 10  # Simplified queue model
+        bottleneck_services = [f"Bedrock Quota Limit ({utilization:.1%} utilization)"]
     else:
         queue_latency_minutes = 0.0
+        utilization = docs_per_minute / effective_capacity if effective_capacity > 0 else 0.0
         bottleneck_services = []
 
-    # Base processing time (from environment or reasonable default)
+    # Base processing time
     try:
         latency_data = get_real_latency_metrics(pattern)
         base_times = latency_data["base_times"]
@@ -466,59 +457,30 @@ def calculate_latency_distribution(
     except Exception:
         base_processing_minutes = float(os.environ["DEFAULT_BASE_PROCESSING_MINUTES"])
 
-    # Adjust processing behavior based on SLA requirements
-    # Different SLA requirements should result in different processing behaviors
-    sla_pressure_factor = 1.0
-    if max_allowed_minutes > 0:
-        # Use configurable baseline SLA (default from Excel: 7 minutes)
-        baseline_sla_minutes = float(os.environ["BASELINE_SLA_MINUTES"])
-        sla_pressure_factor = baseline_sla_minutes / max_allowed_minutes
-        
-        # Adjust base processing time for ALL SLA values, not just tight ones
-        # Tighter SLA = faster processing, Looser SLA = can afford slower processing
-        base_processing_minutes = base_processing_minutes / sla_pressure_factor
-        
-        print(f"🔍 SLA pressure factor: {sla_pressure_factor:.2f}x (SLA: {max_allowed_minutes}min vs baseline: {baseline_sla_minutes}min)")
-        print(f"🔍 Adjusted base processing: {base_processing_minutes:.2f} minutes")
-
     # Total latency = base processing + queue delay
     total_latency_minutes = base_processing_minutes + queue_latency_minutes
-    
-    # Convert to seconds for display
     total_latency_seconds = total_latency_minutes * 60
     
-    # Calculate utilization for display
-    utilization = docs_per_minute / effective_capacity if effective_capacity > 0 else 0.0
-    
-    # Create realistic percentile distribution with SLA considerations
+    # Calculate complexity factor
     complexity_factor = calculate_document_complexity_factor(document_configs or [])
     
-    # Base latency for normal processing
+    # Create realistic percentile distribution
     base_latency_seconds = base_processing_minutes * 60
+    queue_latency_seconds = queue_latency_minutes * 60
     
-    # Percentile calculations with configurable weights
-    # Tighter SLA means less variance in processing times
-    variance_reduction_cap = float(os.environ["VARIANCE_REDUCTION_CAP"])
-    variance_reduction = min(sla_pressure_factor, variance_reduction_cap)  # Configurable cap
-    
-    p50_weight = float(os.environ["P50_QUEUE_WEIGHT"])
-    p75_weight = float(os.environ["P75_QUEUE_WEIGHT"])
-    p90_weight = float(os.environ["P90_QUEUE_WEIGHT"])
-    p95_weight = float(os.environ["P95_QUEUE_WEIGHT"])
-    p99_weight = float(os.environ["P99_QUEUE_WEIGHT"])
-    
-    p50_seconds = base_latency_seconds + (queue_latency_minutes * 60 * p50_weight / variance_reduction)
-    p75_seconds = base_latency_seconds + (queue_latency_minutes * 60 * p75_weight / variance_reduction)
-    p90_seconds = base_latency_seconds + (queue_latency_minutes * 60 * p90_weight * complexity_factor / variance_reduction)
-    p95_seconds = base_latency_seconds + (queue_latency_minutes * 60 * p95_weight * complexity_factor / variance_reduction)
-    p99_seconds = base_latency_seconds + (queue_latency_minutes * 60 * p99_weight * complexity_factor / variance_reduction)
+    # Percentiles reflect processing variance and queue delays
+    p50_seconds = base_latency_seconds + (queue_latency_seconds * 0.3)
+    p75_seconds = base_latency_seconds + (queue_latency_seconds * 0.6)
+    p90_seconds = base_latency_seconds + (queue_latency_seconds * 0.8 * complexity_factor)
+    p95_seconds = base_latency_seconds + (queue_latency_seconds * 0.9 * complexity_factor)
+    p99_seconds = base_latency_seconds + (queue_latency_seconds * 1.0 * complexity_factor)
 
     # Check if latency exceeds limits
     exceeds_limit = total_latency_minutes > max_allowed_minutes
     warning_message = None
 
     if exceeds_limit:
-        warning_message = f"Processing time ({total_latency_minutes:.1f}min) exceeds SLA ({max_allowed_minutes:.1f}min)"
+        warning_message = f"Processing time ({total_latency_minutes:.1f}min) exceeds SLA ({max_allowed_minutes:.1f}min) due to insufficient quota capacity"
 
     # Calculate factors for display
     load_factor = utilization
@@ -539,10 +501,10 @@ def calculate_latency_distribution(
         "varianceFactor": f"{variance_factor:.2f}x",
         "pattern": pattern,
         "exceedsLimit": exceeds_limit,
-        "dataSource": "excel_backlog_simulation",
+        "dataSource": "quota_capacity_analysis",
         "processingRate": f"{effective_capacity:.0f} docs/min",
         "demandRate": f"{docs_per_minute:.1f} docs/min",
-        "peakDemandRate": f"{peak_docs_per_minute:.1f} docs/min",
+        "quotaUtilization": f"{utilization:.1%}",
     }
 
     if warning_message:
@@ -566,43 +528,26 @@ def build_simple_quota_requirements(
     latency_distribution=None,
     document_configs=None,
 ):
-    """Build quota requirements analysis using peak hour demand per inference type with latency-based concurrency."""
+    """Build quota requirements analysis using peak hour demand per inference type."""
     requirements = []
 
     print(f"Starting quota requirements build for {pattern}")
     print(f"Model config: {model_config}")
 
-    # Excel approach: max_latency is always in minutes, apply SLA-based time compression
-    # Just use it for SLA comparison and time compression calculation
-    max_latency_minutes = max_latency  # Frontend sends minutes, use directly
-    baseline_sla_minutes = float(os.environ["BASELINE_SLA_MINUTES"])
-    time_compression_factor = baseline_sla_minutes / max_latency_minutes if max_latency_minutes > 0 else 1.0
-    print(f"🔍 Max allowed latency: {max_latency_minutes} minutes, Time compression: {time_compression_factor:.2f}x")
-
-    # Calculate peak hour demand for each inference type
+    # Calculate peak hour demand for each inference type (no artificial factors)
     peak_ocr_tpm = 0
     peak_classification_tpm = 0
     peak_extraction_tpm = 0
     peak_assessment_tpm = 0
     peak_summarization_tpm = 0
 
-    # Get buffer percentage from environment
-    buffer_percentage_env = os.environ.get("QUOTA_BUFFER_PERCENTAGE")
-    if not buffer_percentage_env:
-        raise ValueError("QUOTA_BUFFER_PERCENTAGE environment variable not set")
-    buffer_percentage = float(buffer_percentage_env)
-
-    # SLA-based time compression factor (from Excel model logic)
-    baseline_sla_minutes = float(os.environ["BASELINE_SLA_MINUTES"])
-    time_compression_factor = baseline_sla_minutes / max_latency_minutes if max_latency_minutes > 0 else 1.0
-    
-    # Apply buffer percentage and time compression
+    # Calculate peak demands directly from hourly breakdown (no buffer or compression factors)
     for hour_data in hourly_breakdown:
-        ocr_tpm = hour_data.get("ocrTokensPerHour", 0) / 60 * buffer_percentage * time_compression_factor
-        classification_tpm = hour_data["classificationTokensPerHour"] / 60 * buffer_percentage * time_compression_factor
-        extraction_tpm = hour_data["extractionTokensPerHour"] / 60 * buffer_percentage * time_compression_factor
-        assessment_tpm = hour_data["assessmentTokensPerHour"] / 60 * buffer_percentage * time_compression_factor
-        summarization_tpm = hour_data["summarizationTokensPerHour"] / 60 * buffer_percentage * time_compression_factor
+        ocr_tpm = hour_data.get("ocrTokensPerHour", 0) / 60
+        classification_tpm = hour_data["classificationTokensPerHour"] / 60
+        extraction_tpm = hour_data["extractionTokensPerHour"] / 60
+        assessment_tpm = hour_data["assessmentTokensPerHour"] / 60
+        summarization_tpm = hour_data["summarizationTokensPerHour"] / 60
 
         peak_ocr_tpm = max(peak_ocr_tpm, ocr_tpm)
         peak_classification_tpm = max(peak_classification_tpm, classification_tpm)
@@ -611,7 +556,7 @@ def build_simple_quota_requirements(
         peak_summarization_tpm = max(peak_summarization_tpm, summarization_tpm)
 
     print(
-        f"🔍 Peak demands (SLA-adjusted) - Time compression: {time_compression_factor:.2f}x - OCR: {peak_ocr_tpm:.0f}, Classification: {peak_classification_tpm:.0f}, Extraction: {peak_extraction_tpm:.0f}, Assessment: {peak_assessment_tpm:.0f}, Summarization: {peak_summarization_tpm:.0f}"
+        f"🔍 Peak demands - OCR: {peak_ocr_tpm:.0f}, Classification: {peak_classification_tpm:.0f}, Extraction: {peak_extraction_tpm:.0f}, Assessment: {peak_assessment_tpm:.0f}, Summarization: {peak_summarization_tpm:.0f}"
     )
 
     # Map inference types to their peak demands and models
@@ -682,22 +627,11 @@ def build_simple_quota_requirements(
 
         print(f"🔍 Retrieved quotas for {model_id} ({step_name}): {model_quota_tpm} TPM, {model_quota_rpm} RPM")
 
-        # Calculate peak requests per minute based on document processing patterns
-        # For capacity planning, we need to consider concurrent requests, not just token throughput
-        # Use time compression factor and buffer to calculate realistic RPM demand
-        
-        # SLA-based time compression and buffer factors
-        max_latency_minutes = max_latency  # Use directly as minutes
-        baseline_sla_minutes = float(os.environ["BASELINE_SLA_MINUTES"])
-        time_compression_factor = baseline_sla_minutes / max_latency_minutes if max_latency_minutes > 0 else 1.0
-        buffer_percentage = float(os.environ["QUOTA_BUFFER_PERCENTAGE"])
-        
-        # Calculate RPM requirement based on document processing volume
-        # RPM and TPM are independent AWS quotas - both must be sufficient
+        # Calculate peak requests per minute based on actual document processing patterns
+        # Use actual request counts from metering data instead of assumptions
         
         if peak_tpm > 0:
             # Get actual RPM from document configuration if available
-            # Look for request count data from metering table
             docs_per_hour_for_step = 0
             actual_requests_per_doc = 0
             
@@ -705,11 +639,23 @@ def build_simple_quota_requirements(
                 if hour_data.get("docsPerHour", 0) > 0:
                     docs_per_hour_for_step = max(docs_per_hour_for_step, hour_data.get("docsPerHour", 0))
             
-            # Try to get actual request count from document configs
-            # Look through document configs for request data
+            # Get actual request count from document configs with metering data
             for doc_config in (document_configs or []):
                 if doc_config.get("docsPerHour", 0) > 0:
-                    # Look for request count fields based on step name
+                    # Check for metering data with actual request counts
+                    metering_data = doc_config.get("metering", {})
+                    if metering_data:
+                        # Sum up requests from all metering entries for this step
+                        step_requests = 0
+                        for key, value in metering_data.items():
+                            if isinstance(value, dict) and step_name.lower() in key.lower():
+                                step_requests += value.get("requests", 0)
+                        
+                        if step_requests > 0:
+                            actual_requests_per_doc = max(actual_requests_per_doc, step_requests)
+                            print(f"🔍 Found metering data: {step_requests} requests for {step_name}")
+                    
+                    # Also check for explicit request count fields
                     request_field_map = {
                         "OCR": "ocrRequests",
                         "Classification": "classificationRequests", 
@@ -729,29 +675,35 @@ def build_simple_quota_requirements(
                 base_rpm = (docs_per_hour_for_step / 60) * actual_requests_per_doc
                 print(f"🔍 Using actual request data: {actual_requests_per_doc} requests/doc for {step_name}")
             else:
-                # Fallback to document volume (1 request per document)
-                base_rpm = docs_per_hour_for_step / 60
-                print(f"🔍 Using document volume fallback: 1 request/doc for {step_name}")
+                # Fallback: estimate based on processing patterns
+                if step_name == "Classification":
+                    # Classification typically processes each page separately
+                    avg_pages_per_doc = 1
+                    for doc_config in (document_configs or []):
+                        if doc_config.get("docsPerHour", 0) > 0:
+                            avg_pages_per_doc = max(avg_pages_per_doc, doc_config.get("avgPages", 1))
+                    base_rpm = (docs_per_hour_for_step / 60) * avg_pages_per_doc
+                    print(f"🔍 Using page-based estimate: {avg_pages_per_doc} pages/doc for {step_name}")
+                elif step_name == "Assessment":
+                    # Assessment may make multiple requests based on granularity
+                    # Default to 2 requests per document for granular assessment
+                    base_rpm = (docs_per_hour_for_step / 60) * 2
+                    print(f"🔍 Using assessment estimate: 2 requests/doc for {step_name}")
+                else:
+                    # Other steps typically 1 request per document
+                    base_rpm = docs_per_hour_for_step / 60
+                    print(f"🔍 Using document volume fallback: 1 request/doc for {step_name}")
             
-            # Apply buffer factor and time compression
-            peak_rpm = base_rpm * buffer_percentage * time_compression_factor
+            # Use direct calculation without artificial factors
+            peak_rpm = base_rpm
             
             # Ensure minimum meaningful RPM
             peak_rpm = max(peak_rpm, 1.0)
         else:
             # Set minimum RPM for required pattern steps with no current demand
-            base_rpm = 0
-            min_rpm_config = os.environ.get("MIN_STEP_RPM_CONFIG")
-            if min_rpm_config:
-                try:
-                    min_rpm_mapping = json.loads(min_rpm_config)
-                    peak_rpm = min_rpm_mapping.get(step_name, 1.0)  # Default to 1 if step not configured
-                except json.JSONDecodeError:
-                    peak_rpm = 1.0  # Fallback if config is invalid
-            else:
-                peak_rpm = 1.0  # Default minimum
+            peak_rpm = 1.0
         
-        print(f"🔍 RPM calculation: docs_per_hour={docs_per_hour_for_step}, base_rpm={base_rpm:.1f}, time_compression={time_compression_factor:.2f}x, peak_rpm={peak_rpm:.1f}")
+        print(f"🔍 RPM calculation: docs_per_hour={docs_per_hour_for_step}, base_rpm={base_rpm:.1f}, peak_rpm={peak_rpm:.1f}")
 
         # Include configured inference types with demand
         should_include = peak_tpm > 0 or peak_rpm > 1.0  # Include if there's meaningful demand

@@ -456,8 +456,60 @@ const CapacityPlanningLayout = () => {
       }))
       .filter((customOption) => !classOptions.some((classOption) => classOption.value === customOption.value));
 
-    return [defaultOption, ...classOptions, ...customOptions];
-  }, [configuration, documentConfigs]);
+    // Add processed document types from documents context
+    const processedOptions = [];
+    if (documents && Array.isArray(documents)) {
+      const processedTypes = new Set();
+      documents.forEach((doc) => {
+        if (doc.ObjectStatus === 'COMPLETED') {
+          const docType = doc.ObjectKey.split('.')[0].split(' - ')[0].replace(/_/g, '-') || doc.DocumentClass || doc.Sections?.[0]?.Class;
+          if (docType && docType !== 'Unknown') {
+            processedTypes.add(docType);
+          }
+        }
+      });
+
+      processedTypes.forEach((docType) => {
+        if (!classOptions.some((opt) => opt.value === docType) && !customOptions.some((opt) => opt.value === docType)) {
+          processedOptions.push({
+            label: docType,
+            value: docType,
+            description: `Processed document type: ${docType}`,
+          });
+        }
+      });
+    }
+
+    return [defaultOption, ...classOptions, ...customOptions, ...processedOptions];
+  }, [configuration, documentConfigs, documents]);
+
+  // Processing Schedule should only show configured document types
+  const scheduleDocumentTypeOptions = useMemo(() => {
+    const defaultOption = { label: '-- Select Document Type --', value: '', disabled: true };
+
+    // Only include document types that have been configured in Document Processing
+    const configuredOptions = documentConfigs
+      .filter((config) => config.type && config.type !== '')
+      .map((config) => ({
+        label: config.type,
+        value: config.type,
+        description: `Configure processing schedule for ${config.type}`,
+      }));
+
+    if (configuredOptions.length === 0) {
+      return [
+        defaultOption,
+        {
+          label: 'No document types configured',
+          value: '',
+          disabled: true,
+          description: 'Add document types in Document Processing section first',
+        },
+      ];
+    }
+
+    return [defaultOption, ...configuredOptions];
+  }, [documentConfigs]);
 
   const getDeployedPattern = () => {
     // Manual override takes precedence over everything
@@ -1497,11 +1549,11 @@ const CapacityPlanningLayout = () => {
                     <Select
                       selectedOption={
                         item.documentType && item.documentType !== ''
-                          ? documentTypeOptions.find((opt) => opt.value === item.documentType && !opt.disabled)
+                          ? scheduleDocumentTypeOptions.find((opt) => opt.value === item.documentType && !opt.disabled)
                           : null
                       }
                       onChange={({ detail }) => updateTimeSlot(item.index, 'documentType', detail.selectedOption.value)}
-                      options={documentTypeOptions}
+                      options={scheduleDocumentTypeOptions}
                       placeholder="Select document type"
                       expandToViewport
                     />
