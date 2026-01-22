@@ -541,13 +541,17 @@ def build_simple_quota_requirements(
     peak_assessment_tpm = 0
     peak_summarization_tpm = 0
 
-    # Calculate peak demands directly from hourly breakdown (no buffer or compression factors)
+    # Calculate peak demands with SLA-based adjustment
+    # Tighter SLA requires higher processing capacity to meet deadlines
+    sla_factor = 7.0 / max_latency if max_latency > 0 else 1.0  # 7 min baseline from Excel model
+    # Don't artificially limit - allow both higher and lower quota based on SLA
+    
     for hour_data in hourly_breakdown:
-        ocr_tpm = hour_data.get("ocrTokensPerHour", 0) / 60
-        classification_tpm = hour_data["classificationTokensPerHour"] / 60
-        extraction_tpm = hour_data["extractionTokensPerHour"] / 60
-        assessment_tpm = hour_data["assessmentTokensPerHour"] / 60
-        summarization_tpm = hour_data["summarizationTokensPerHour"] / 60
+        ocr_tpm = hour_data.get("ocrTokensPerHour", 0) / 60 * sla_factor
+        classification_tpm = hour_data["classificationTokensPerHour"] / 60 * sla_factor
+        extraction_tpm = hour_data["extractionTokensPerHour"] / 60 * sla_factor
+        assessment_tpm = hour_data["assessmentTokensPerHour"] / 60 * sla_factor
+        summarization_tpm = hour_data["summarizationTokensPerHour"] / 60 * sla_factor
 
         peak_ocr_tpm = max(peak_ocr_tpm, ocr_tpm)
         peak_classification_tpm = max(peak_classification_tpm, classification_tpm)
@@ -556,7 +560,7 @@ def build_simple_quota_requirements(
         peak_summarization_tpm = max(peak_summarization_tpm, summarization_tpm)
 
     print(
-        f"🔍 Peak demands - OCR: {peak_ocr_tpm:.0f}, Classification: {peak_classification_tpm:.0f}, Extraction: {peak_extraction_tpm:.0f}, Assessment: {peak_assessment_tpm:.0f}, Summarization: {peak_summarization_tpm:.0f}"
+        f"🔍 Peak demands (SLA factor: {sla_factor:.2f}x for {max_latency}min) - OCR: {peak_ocr_tpm:.0f}, Classification: {peak_classification_tpm:.0f}, Extraction: {peak_extraction_tpm:.0f}, Assessment: {peak_assessment_tpm:.0f}, Summarization: {peak_summarization_tpm:.0f}"
     )
 
     # Map inference types to their peak demands and models
@@ -694,8 +698,8 @@ def build_simple_quota_requirements(
                     base_rpm = docs_per_hour_for_step / 60
                     print(f"🔍 Using document volume fallback: 1 request/doc for {step_name}")
             
-            # Use direct calculation without artificial factors
-            peak_rpm = base_rpm
+            # Use direct calculation with SLA adjustment
+            peak_rpm = base_rpm * sla_factor
             
             # Ensure minimum meaningful RPM
             peak_rpm = max(peak_rpm, 1.0)
