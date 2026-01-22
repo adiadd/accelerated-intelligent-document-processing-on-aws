@@ -327,10 +327,8 @@ def get_simple_quotas():
                 time.sleep(0.1)
             except Exception as e:
                 print(f"⚠️ Failed to get RPM quota for {model_id}: {e}")
-                # Use configurable default RPM quota if not found
-                default_rpm = int(os.environ["DEFAULT_MODEL_RPM"])
-                quotas["bedrock_models_rpm"][model_id] = default_rpm
-                print(f"✅ Using default RPM quota for {model_id}: {default_rpm}")
+                # Raise error if RPM quota not found - no defaults
+                raise ValueError(f"RPM quota not available for model {model_id}. Please configure proper quota codes.")
 
         print(f"📊 Retrieved {retrieved_count} quotas from AWS Service Quotas API")
 
@@ -420,17 +418,23 @@ def calculate_latency_distribution(
     # max_allowed_latency is in minutes
     max_allowed_minutes = max_allowed_latency
 
-    # Get processing capacity from quotas
-    bedrock_quota_tpm = quotas.get("bedrock", int(os.environ["DEFAULT_BEDROCK_TPM"]))
-    bedrock_quota_rpm = quotas.get("bedrock_models_rpm", {})
+    # Get processing capacity from quotas - no defaults
+    bedrock_quota_tpm = quotas.get("bedrock")
+    if not bedrock_quota_tpm:
+        raise ValueError("Bedrock TPM quota not configured")
     
-    # Calculate effective processing capacity
+    bedrock_quota_rpm = quotas.get("bedrock_models_rpm", {})
+    if not bedrock_quota_rpm:
+        raise ValueError("Bedrock RPM quotas not configured")
+    
+    # Calculate effective processing capacity - no defaults
     total_tokens = sum(tokens_per_hour.values()) if isinstance(tokens_per_hour, dict) else tokens_per_hour
-    avg_tokens_per_request = max(total_tokens / max(docs_per_hour, 1), int(os.environ["MIN_TOKENS_PER_REQUEST"]))
+    min_tokens_per_request = int(os.environ["MIN_TOKENS_PER_REQUEST"])
+    avg_tokens_per_request = max(total_tokens / max(docs_per_hour, 1), min_tokens_per_request)
     
     # Capacity limited by either tokens or requests
     token_limited_capacity = bedrock_quota_tpm / avg_tokens_per_request  # docs/min
-    request_limited_capacity = min(bedrock_quota_rpm.values()) if bedrock_quota_rpm else int(os.environ["DEFAULT_REQUEST_CAPACITY"])
+    request_limited_capacity = min(bedrock_quota_rpm.values()) if bedrock_quota_rpm else 0
     
     effective_capacity = min(token_limited_capacity, request_limited_capacity)
     
@@ -449,13 +453,26 @@ def calculate_latency_distribution(
         utilization = docs_per_minute / effective_capacity if effective_capacity > 0 else 0.0
         bottleneck_services = []
 
-    # Base processing time
+    # Base processing time adjusted for SLA requirements
     try:
         latency_data = get_real_latency_metrics(pattern)
         base_times = latency_data["base_times"]
-        base_processing_minutes = sum(base_times.values()) / 60  # Convert to minutes
-    except Exception:
-        base_processing_minutes = float(os.environ["DEFAULT_BASE_PROCESSING_MINUTES"])
+        actual_processing_minutes = sum(base_times.values()) / 60  # Convert to minutes
+    except Exception as e:
+        raise ValueError(f"Unable to get processing time metrics: {e}")
+
+    # Adjust processing behavior based on SLA - tighter SLA means faster processing
+    if max_allowed_minutes > 0:
+        sla_adjustment_factor = actual_processing_minutes / max_allowed_minutes
+        # If SLA is tighter than actual processing time, we need to process faster
+        if sla_adjustment_factor > 1.0:
+            # Need to process faster - reduce base processing time
+            base_processing_minutes = actual_processing_minutes / sla_adjustment_factor
+        else:
+            # SLA is looser - can use normal processing time
+            base_processing_minutes = actual_processing_minutes
+    else:
+        base_processing_minutes = actual_processing_minutes
 
     # Total latency = base processing + queue delay
     total_latency_minutes = base_processing_minutes + queue_latency_minutes
@@ -521,7 +538,7 @@ def build_simple_quota_requirements(
     tokens_per_hour,
     docs_per_hour,
     quotas,
-    max_latency,
+    max_allowed_latency,
     pattern,
     model_config,
     hourly_breakdown,
@@ -541,10 +558,17 @@ def build_simple_quota_requirements(
     peak_assessment_tpm = 0
     peak_summarization_tpm = 0
 
-    # Calculate peak demands with SLA-based adjustment
-    # Tighter SLA requires higher processing capacity to meet deadlines
-    sla_factor = 7.0 / max_latency if max_latency > 0 else 1.0  # 7 min baseline from Excel model
-    # Don't artificially limit - allow both higher and lower quota based on SLA
+    # Calculate peak demands with SLA-based adjustment using actual processing time
+    # Get actual processing time for this pattern
+    try:
+        latency_data = get_real_latency_metrics(pattern)
+        base_times = latency_data["base_times"]
+        actual_processing_minutes = sum(base_times.values()) / 60
+    except Exception:
+        raise ValueError("Unable to get processing time metrics - no baseline available for SLA calculation")
+    
+    # Scale based on actual processing time vs required SLA
+    sla_factor = actual_processing_minutes / max_allowed_latency if max_allowed_latency > 0 else 1.0
     
     for hour_data in hourly_breakdown:
         ocr_tpm = hour_data.get("ocrTokensPerHour", 0) / 60 * sla_factor
@@ -560,7 +584,7 @@ def build_simple_quota_requirements(
         peak_summarization_tpm = max(peak_summarization_tpm, summarization_tpm)
 
     print(
-        f"🔍 Peak demands (SLA factor: {sla_factor:.2f}x for {max_latency}min) - OCR: {peak_ocr_tpm:.0f}, Classification: {peak_classification_tpm:.0f}, Extraction: {peak_extraction_tpm:.0f}, Assessment: {peak_assessment_tpm:.0f}, Summarization: {peak_summarization_tpm:.0f}"
+        f"🔍 Peak demands (SLA factor: {sla_factor:.2f}x - actual: {actual_processing_minutes:.1f}min vs required: {max_allowed_latency}min) - OCR: {peak_ocr_tpm:.0f}, Classification: {peak_classification_tpm:.0f}, Extraction: {peak_extraction_tpm:.0f}, Assessment: {peak_assessment_tpm:.0f}, Summarization: {peak_summarization_tpm:.0f}"
     )
 
     # Map inference types to their peak demands and models
@@ -631,83 +655,58 @@ def build_simple_quota_requirements(
 
         print(f"🔍 Retrieved quotas for {model_id} ({step_name}): {model_quota_tpm} TPM, {model_quota_rpm} RPM")
 
-        # Calculate peak requests per minute based on actual document processing patterns
-        # Use actual request counts from metering data instead of assumptions
+        # Get actual metering data from DynamoDB table - no fallbacks
+        import boto3
         
-        if peak_tpm > 0:
-            # Get actual RPM from document configuration if available
-            docs_per_hour_for_step = 0
-            actual_requests_per_doc = 0
-            
-            for hour_data in hourly_breakdown:
-                if hour_data.get("docsPerHour", 0) > 0:
-                    docs_per_hour_for_step = max(docs_per_hour_for_step, hour_data.get("docsPerHour", 0))
-            
-            # Get actual request count from document configs with metering data
-            for doc_config in (document_configs or []):
-                if doc_config.get("docsPerHour", 0) > 0:
-                    # Check for metering data with actual request counts
-                    metering_data = doc_config.get("metering", {})
-                    if metering_data:
-                        # Sum up requests from all metering entries for this step
-                        step_requests = 0
-                        for key, value in metering_data.items():
-                            if isinstance(value, dict) and step_name.lower() in key.lower():
-                                step_requests += value.get("requests", 0)
-                        
-                        if step_requests > 0:
-                            actual_requests_per_doc = max(actual_requests_per_doc, step_requests)
-                            print(f"🔍 Found metering data: {step_requests} requests for {step_name}")
-                    
-                    # Also check for explicit request count fields
-                    request_field_map = {
-                        "OCR": "ocrRequests",
-                        "Classification": "classificationRequests", 
-                        "Extraction": "extractionRequests",
-                        "Assessment": "assessmentRequests",
-                        "Summarization": "summarizationRequests"
-                    }
-                    
-                    request_field = request_field_map.get(step_name)
-                    if request_field and request_field in doc_config:
-                        requests_per_doc = float(doc_config.get(request_field, 1))
-                        actual_requests_per_doc = max(actual_requests_per_doc, requests_per_doc)
-            
-            # Calculate RPM based on actual request data if available
-            if actual_requests_per_doc > 0:
-                # Use actual request count from metering data
-                base_rpm = (docs_per_hour_for_step / 60) * actual_requests_per_doc
-                print(f"🔍 Using actual request data: {actual_requests_per_doc} requests/doc for {step_name}")
-            else:
-                # Fallback: estimate based on processing patterns
-                if step_name == "Classification":
-                    # Classification typically processes each page separately
-                    avg_pages_per_doc = 1
-                    for doc_config in (document_configs or []):
-                        if doc_config.get("docsPerHour", 0) > 0:
-                            avg_pages_per_doc = max(avg_pages_per_doc, doc_config.get("avgPages", 1))
-                    base_rpm = (docs_per_hour_for_step / 60) * avg_pages_per_doc
-                    print(f"🔍 Using page-based estimate: {avg_pages_per_doc} pages/doc for {step_name}")
-                elif step_name == "Assessment":
-                    # Assessment may make multiple requests based on granularity
-                    # Default to 2 requests per document for granular assessment
-                    base_rpm = (docs_per_hour_for_step / 60) * 2
-                    print(f"🔍 Using assessment estimate: 2 requests/doc for {step_name}")
-                else:
-                    # Other steps typically 1 request per document
-                    base_rpm = docs_per_hour_for_step / 60
-                    print(f"🔍 Using document volume fallback: 1 request/doc for {step_name}")
-            
-            # Use direct calculation with SLA adjustment
-            peak_rpm = base_rpm * sla_factor
-            
-            # Ensure minimum meaningful RPM
-            peak_rpm = max(peak_rpm, 1.0)
-        else:
-            # Set minimum RPM for required pattern steps with no current demand
-            peak_rpm = 1.0
+        dynamodb = boto3.resource('dynamodb')
+        metering_table_name = os.environ.get('METERING_TABLE_NAME')
         
-        print(f"🔍 RPM calculation: docs_per_hour={docs_per_hour_for_step}, base_rpm={base_rpm:.1f}, peak_rpm={peak_rpm:.1f}")
+        if not metering_table_name:
+            raise ValueError("METERING_TABLE_NAME not configured")
+        
+        actual_requests_per_hour = 0
+        
+        try:
+            table = dynamodb.Table(metering_table_name)
+            
+            # Query recent metering data for this processing step
+            response = table.scan(
+                FilterExpression=boto3.dynamodb.conditions.Attr('metering').exists()
+            )
+            
+            print(f"🔍 Found {len(response.get('Items', []))} metering records")
+            
+            # Debug: Show all metering keys
+            for item in response.get('Items', []):
+                metering_data = item.get('metering', {})
+                print(f"🔍 Metering keys: {list(metering_data.keys())}")
+                break  # Just show first record
+            
+            # Sum up requests from metering data
+            for item in response.get('Items', []):
+                metering_data = item.get('metering', {})
+                for key, value in metering_data.items():
+                    print(f"🔍 Checking key: {key} for step: {step_name}")
+                    # Look for bedrock entries that match the processing step
+                    if isinstance(value, dict) and step_name.lower() in key.lower() and 'bedrock' in key.lower():
+                        requests = value.get('requests', 0)
+                        if requests > 0:
+                            # Scale by planned document volume
+                            for hour_data in hourly_breakdown:
+                                docs_this_hour = hour_data.get("docsPerHour", 0)
+                                actual_requests_per_hour += requests * docs_this_hour
+                            print(f"🔍 FOUND Metering data: {key} -> {requests} req/doc * {docs_this_hour} docs = {actual_requests_per_hour} req/hour")
+                            break  # Found the data, no need to continue
+            
+            if actual_requests_per_hour == 0:
+                raise ValueError(f"No metering data found for {step_name} processing step")
+                
+        except Exception as e:
+            raise ValueError(f"Failed to read metering data for {step_name}: {e}")
+        
+        peak_rpm = (actual_requests_per_hour / 60) * sla_factor
+        
+        print(f"🔍 RPM from metering: {actual_requests_per_hour} req/hour * {sla_factor:.2f}x SLA = {peak_rpm:.1f} RPM")
 
         # Include configured inference types with demand
         should_include = peak_tpm > 0 or peak_rpm > 1.0  # Include if there's meaningful demand

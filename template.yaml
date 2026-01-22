@@ -4895,26 +4895,27 @@ Resources:
           RECOMMENDATION_HIGH_LATENCY_THRESHOLD: "300"
           RECOMMENDATION_LARGE_DOC_THRESHOLD: "50000"
           RECOMMENDATION_HIGH_PAGE_THRESHOLD: "20"
-          DEFAULT_MODEL_RPM: "1000"
+          # Remove hardcoded defaults - use actual quota values only
           MEDIUM_COMPLEXITY_THRESHOLD: "5000"
           HIGH_COMPLEXITY_THRESHOLD: "15000"
           PAGE_COMPLEXITY_FACTOR: "0.1"
           HIGH_COMPLEXITY_MULTIPLIER: "2.0"
           MEDIUM_COMPLEXITY_MULTIPLIER: "1.5"
-          DEFAULT_BEDROCK_TPM: "6000000"
+          # Remove hardcoded defaults - use actual quota values only
           MIN_TOKENS_PER_REQUEST: "1000"
-          DEFAULT_REQUEST_CAPACITY: "2000"
+          # Remove hardcoded defaults - use actual quota values only
           PEAK_DEMAND_MULTIPLIER: "4.6"
           PEAK_DURATION_MINUTES: "5.0"
-          DEFAULT_BASE_PROCESSING_MINUTES: "2.0"
+          # Remove hardcoded defaults - use actual quota values only
           P50_QUEUE_WEIGHT: "0.3"
           P75_QUEUE_WEIGHT: "0.6"
           P90_QUEUE_WEIGHT: "0.8"
           P95_QUEUE_WEIGHT: "0.9"
           P99_QUEUE_WEIGHT: "1.0"
-          MIN_STEP_RPM_CONFIG: '{"OCR":1,"Classification":1,"Extraction":1,"Assessment":1,"Summarization":1}'
+          # Remove hardcoded minimum RPM defaults
           BEDROCK_MODEL_QUOTA_CODES: '{"us.amazon.nova-lite-v1:0":"L-7C42E72A","us.amazon.nova-pro-v1:0":"L-C0326783","us.amazon.nova-premier-v1:0":"L-AA7FE948","us.anthropic.claude-3-haiku-20240307-v1:0":"L-DCADBC78","us.anthropic.claude-3-5-sonnet-20241022-v2:0":"L-FF8B4E28","us.anthropic.claude-sonnet-4-5-20250929-v1:0":"L-F4DDD3EB"}'
           BEDROCK_MODEL_RPM_QUOTA_CODES: '{"us.amazon.nova-lite-v1:0":"L-7C42E72A","us.amazon.nova-pro-v1:0":"L-C0326783","us.amazon.nova-premier-v1:0":"L-AA7FE948","us.anthropic.claude-3-haiku-20240307-v1:0":"L-DCADBC78","us.anthropic.claude-3-5-sonnet-20241022-v2:0":"L-FF8B4E28","us.anthropic.claude-sonnet-4-5-20250929-v1:0":"L-F4DDD3EB"}'
+          METERING_TABLE_NAME: !Ref TrackingTable
       Policies:
         - Statement:
             - Effect: Allow
@@ -4922,6 +4923,15 @@ Resources:
                 - servicequotas:GetServiceQuota
                 - servicequotas:ListServiceQuotas
               Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+                - dynamodb:Query
+              Resource: !GetAtt TrackingTable.Arn
+            - Effect: Allow
+              Action:
+                - kms:Decrypt
+              Resource: !GetAtt CustomerManagedEncryptionKey.Arn
 
   CalculateCapacityFunctionLogGroup:
     Type: AWS::Logs::LogGroup
