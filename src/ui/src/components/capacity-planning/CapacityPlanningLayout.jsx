@@ -1325,22 +1325,32 @@ const CapacityPlanningLayout = () => {
                       />
                       {!item.avgPages && (
                         <div>
-                          <div style={{ fontSize: '0.75em', color: '#d13212', marginTop: '2px' }}>Process documents to calculate</div>
-                          <Button
-                            variant="link"
-                            onClick={async () => {
-                              const actualPageCounts = await fetchActualPageCounts();
-                              const actualPages = actualPageCounts[item.type];
-                              if (actualPages) {
-                                updateDocumentConfig(item.index, 'avgPages', actualPages);
-                              } else {
-                                console.log(`No page data found for document type: ${item.type}`);
-                              }
-                            }}
-                            style={{ fontSize: '0.75em', padding: '2px 0' }}
-                          >
-                            Calculate from processed docs
-                          </Button>
+                          <div style={{ fontSize: '0.75em', color: '#d13212', marginTop: '2px' }}>
+                            Enter average pages per document
+                          </div>
+                          <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                            <Button
+                              variant="link"
+                              onClick={() => updateDocumentConfig(item.index, 'avgPages', '1')}
+                              style={{ fontSize: '0.75em', padding: '2px 4px' }}
+                            >
+                              1 page
+                            </Button>
+                            <Button
+                              variant="link"
+                              onClick={() => updateDocumentConfig(item.index, 'avgPages', '2')}
+                              style={{ fontSize: '0.75em', padding: '2px 4px' }}
+                            >
+                              2 pages
+                            </Button>
+                            <Button
+                              variant="link"
+                              onClick={() => updateDocumentConfig(item.index, 'avgPages', '5')}
+                              style={{ fontSize: '0.75em', padding: '2px 4px' }}
+                            >
+                              5 pages
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </div>
