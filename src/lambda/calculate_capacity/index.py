@@ -178,7 +178,7 @@ def generate_adaptive_recommendations(
         high_page_docs = [
             doc
             for doc in document_configs
-            if doc.get("avgPages", 1) > high_page_threshold
+            if doc.get("avgPages", 0) > high_page_threshold
         ]
         if high_page_docs:
             recommendations.append(
@@ -382,7 +382,10 @@ def calculate_document_complexity_factor(document_configs):
             continue
 
         # Base complexity factors
-        pages = doc_config.get("avgPages", 1)
+        pages = doc_config.get("avgPages", 0)
+        if pages == 0:
+            print(f"⚠️ No page data for document - using minimal fallback for complexity calculation")
+            pages = 1  # Minimal fallback only for calculation
         page_factor = 1.0 + (pages - 1) * page_complexity_factor
 
         # Token density indicates document complexity
@@ -712,6 +715,7 @@ def build_simple_quota_requirements(
             raise ValueError("METERING_TABLE_NAME not configured")
         
         actual_requests_per_hour = 0
+        actual_pages_per_doc = None
         
         try:
             table = dynamodb.Table(metering_table_name)
@@ -734,7 +738,7 @@ def build_simple_quota_requirements(
                 print(f"🔍 Metering keys: {list(metering_data.keys())}")
                 break  # Just show first record
             
-            # Sum up requests from metering data
+            # Sum up requests and pages from metering data
             for item in response.get('Items', []):
                 metering_data = item.get('Metering', {})
                 if isinstance(metering_data, str):
@@ -742,6 +746,15 @@ def build_simple_quota_requirements(
                     metering_data = json_module.loads(metering_data)
                 # Convert Decimal types to float/int for math operations
                 metering_data = convert_decimal_to_float(metering_data)
+                
+                # Extract actual page count from metering data
+                if 'number_of_pages' in item:
+                    pages = convert_decimal_to_float(item['number_of_pages'])
+                    if actual_pages_per_doc is None:
+                        actual_pages_per_doc = pages
+                    else:
+                        actual_pages_per_doc = (actual_pages_per_doc + pages) / 2  # Running average
+                
                 for key, value in metering_data.items():
                     print(f"🔍 Checking key: {key} for step: {step_name}")
                     # Look for bedrock entries that match the processing step
@@ -764,6 +777,12 @@ def build_simple_quota_requirements(
         peak_rpm = (actual_requests_per_hour / 60) * sla_factor
         
         print(f"🔍 RPM from metering: {actual_requests_per_hour} req/hour * {sla_factor:.2f}x SLA = {peak_rpm:.1f} RPM")
+        
+        # Log actual page count if found
+        if actual_pages_per_doc is not None:
+            print(f"📄 Actual pages per document from metering: {actual_pages_per_doc:.1f}")
+        else:
+            print("⚠️ No actual page count found in metering data - using configured values")
 
         # Include configured inference types with demand
         should_include = peak_tpm > 0 or peak_rpm > 1.0  # Include if there's meaningful demand
@@ -981,7 +1000,10 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                 doc_config = next(
                     (dc for dc in document_configs if dc.get("type") == doc_type), {}
                 )
-                avg_pages = doc_config.get("avgPages", 1)
+                avg_pages = doc_config.get("avgPages", 0)
+                if avg_pages == 0:
+                    print(f"⚠️ No page data for {doc_type} - using minimal fallback")
+                    avg_pages = 1  # Minimal fallback only for calculation
                 ocr_tokens = doc_config.get("ocrTokens", 0)  # Add OCR tokens
                 classification_tokens = doc_config.get("classificationTokens", 0)
                 extraction_tokens = doc_config.get("extractionTokens", 0)
@@ -1037,7 +1059,10 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
 
         for doc_config in document_configs:
             docs_per_hour_config = doc_config.get("docsPerHour", 0)
-            avg_pages = doc_config.get("avgPages", 1)
+            avg_pages = doc_config.get("avgPages", 0)
+            if avg_pages == 0:
+                print(f"⚠️ No page data for document type - capacity calculation may be inaccurate")
+                avg_pages = 1  # Minimal fallback only for calculation
 
             ocr_tokens_per_doc = doc_config.get("ocrTokens", 0)
             classification_tokens_per_doc = doc_config.get("classificationTokens", 0)

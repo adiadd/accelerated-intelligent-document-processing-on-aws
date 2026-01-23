@@ -32,6 +32,70 @@ const CapacityPlanningLayout = () => {
   const { documents } = useDocumentsContext() || {};
 
   const [manualPattern, setManualPattern] = useState(null);
+  // Function to fetch actual page counts from processed documents
+  const fetchActualPageCounts = async () => {
+    try {
+      // Use the documents from context which contains processed documents
+      if (!documents || documents.length === 0) {
+        console.log('📄 No processed documents found in context');
+        return {};
+      }
+
+      const pageCountMap = {};
+      const docTypeStats = {};
+
+      // Calculate average pages per document type from processed documents
+      documents.forEach((doc) => {
+        if (doc.numberOfPages && doc.documentType) {
+          const docType = doc.documentType;
+          const pages = parseInt(doc.numberOfPages, 10);
+
+          if (!docTypeStats[docType]) {
+            docTypeStats[docType] = { totalPages: 0, count: 0 };
+          }
+
+          docTypeStats[docType].totalPages += pages;
+          docTypeStats[docType].count += 1;
+        }
+      });
+
+      // Calculate averages
+      Object.keys(docTypeStats).forEach((docType) => {
+        const stats = docTypeStats[docType];
+        pageCountMap[docType] = (stats.totalPages / stats.count).toFixed(1);
+      });
+
+      console.log('📄 Calculated page counts from processed documents:', pageCountMap);
+      return pageCountMap;
+    } catch (error) {
+      console.warn('Could not fetch actual page counts from processed documents:', error);
+      return {};
+    }
+  };
+
+  // Auto-populate avgPages from processed documents
+  useEffect(() => {
+    const populatePageCounts = async () => {
+      if (documents && documents.length > 0) {
+        const actualPageCounts = await fetchActualPageCounts();
+
+        if (Object.keys(actualPageCounts).length > 0) {
+          const updatedConfigs = documentConfigs.map((config) => {
+            const actualPages = actualPageCounts[config.type];
+            if (actualPages && !config.avgPages) {
+              return { ...config, avgPages: actualPages };
+            }
+            return config;
+          });
+
+          setDocumentConfigs(updatedConfigs);
+        }
+      }
+    };
+
+    populatePageCounts();
+  }, [documents]); // Run when documents change
+
   const [documentConfigs, setDocumentConfigs] = useState([
     {
       type: '',
@@ -280,7 +344,7 @@ const CapacityPlanningLayout = () => {
 
     const newConfig = {
       type: docType,
-      avgPages: 1, // Default, user can adjust
+      avgPages: '', // Will be calculated from actual documents
       ocrTokens: metering.ocrTokens !== undefined ? metering.ocrTokens : '',
       classificationTokens: metering.classificationTokens !== undefined ? metering.classificationTokens : '',
       extractionTokens: metering.extractionTokens !== undefined ? metering.extractionTokens : '',
@@ -332,7 +396,7 @@ const CapacityPlanningLayout = () => {
 
       const newConfig = {
         type: docType,
-        avgPages: 1,
+        avgPages: metering.avgPages || '', // Use actual page count from metering
         ocrTokens: metering.ocrTokens !== undefined ? metering.ocrTokens : '',
         classificationTokens: metering.classificationTokens !== undefined ? metering.classificationTokens : '',
         extractionTokens: metering.extractionTokens !== undefined ? metering.extractionTokens : '',
@@ -629,7 +693,7 @@ const CapacityPlanningLayout = () => {
             // Find the document config for this type
             const docConfig = documentConfigs.find((config) => config.type === docType) || {
               type: docType,
-              avgPages: 1,
+              avgPages: '', // No default - must be calculated from actual documents
               ocrTokens: '',
               classificationTokens: '',
               extractionTokens: '',
@@ -639,7 +703,7 @@ const CapacityPlanningLayout = () => {
 
             aggregatedDocConfigs[docType] = {
               type: docType,
-              avgPages: parseFloat(docConfig.avgPages || 1),
+              avgPages: parseFloat(docConfig.avgPages) || 0, // Use actual pages, 0 if not available
               ocrTokens: parseFloat(docConfig.ocrTokens || 0),
               classificationTokens: parseFloat(docConfig.classificationTokens || 0),
               extractionTokens: parseFloat(docConfig.extractionTokens || 0),
@@ -874,14 +938,14 @@ const CapacityPlanningLayout = () => {
         const docsPerHour = safeParseInt(slot.docsPerHour, 0);
 
         const docConfig = documentConfigs.find((config) => config.type === docType) || {
-          avgPages: 1,
+          avgPages: '', // No default - must be calculated from actual documents
           classificationTokens: 0,
           extractionTokens: 0,
           summarizationTokens: 0,
           assessmentTokens: 0,
         };
 
-        const pages = safeParseFloat(docConfig.avgPages, 1);
+        const pages = safeParseFloat(docConfig.avgPages, 0); // Use actual pages, 0 if not available
         const ocrTokens = safeParseFloat(docConfig.ocrTokens, 0);
         const classificationTokens = safeParseFloat(docConfig.classificationTokens, 0);
         const extractionTokens = safeParseFloat(docConfig.extractionTokens, 0);
@@ -1235,12 +1299,35 @@ const CapacityPlanningLayout = () => {
                   ),
                   width: 80,
                   cell: (item) => (
-                    <Input
-                      type="number"
-                      value={item.avgPages}
-                      onChange={({ detail }) => updateDocumentConfig(item.index, 'avgPages', detail.value)}
-                      step={0.1}
-                    />
+                    <div>
+                      <Input
+                        type="number"
+                        value={item.avgPages}
+                        onChange={({ detail }) => updateDocumentConfig(item.index, 'avgPages', detail.value)}
+                        step={0.1}
+                        placeholder="Process docs first"
+                      />
+                      {!item.avgPages && (
+                        <div>
+                          <div style={{ fontSize: '0.75em', color: '#d13212', marginTop: '2px' }}>Process documents to calculate</div>
+                          {documents && documents.length > 0 && (
+                            <Button
+                              variant="link"
+                              onClick={async () => {
+                                const actualPageCounts = await fetchActualPageCounts();
+                                const actualPages = actualPageCounts[item.type];
+                                if (actualPages) {
+                                  updateDocumentConfig(item.index, 'avgPages', actualPages);
+                                }
+                              }}
+                              style={{ fontSize: '0.75em', padding: '2px 0' }}
+                            >
+                              Calculate from processed docs
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   ),
                 },
                 ...(configuration?.ocr?.backend === 'bedrock'
@@ -1365,7 +1452,7 @@ const CapacityPlanningLayout = () => {
                 onClick={() => {
                   const newConfig = {
                     type: '',
-                    avgPages: 1,
+                    avgPages: '', // No default - must be calculated from actual documents
                     ocrTokens: '',
                     classificationTokens: '',
                     extractionTokens: '',
@@ -1437,7 +1524,7 @@ const CapacityPlanningLayout = () => {
                           // At least type and avgPages required
                           const config = {
                             type: values[0] || '',
-                            avgPages: parseFloat(values[1]) || 1,
+                            avgPages: parseFloat(values[1]) || 0, // Use actual pages from CSV, 0 if not provided
                             ocrTokens: hasValidOcrColumn && values[ocrColumnIndex] ? values[ocrColumnIndex] : '',
                             classificationTokens: values[hasValidOcrColumn ? ocrColumnIndex + 1 : 2] || '',
                             extractionTokens: values[hasValidOcrColumn ? ocrColumnIndex + 2 : 3] || '',
@@ -1493,7 +1580,7 @@ const CapacityPlanningLayout = () => {
                 documentConfigs.forEach((config) => {
                   const row = [
                     `"${config.type || ''}"`,
-                    `"${config.avgPages || 1}"`,
+                    `"${config.avgPages || ''}"`, // Export actual pages, empty if not calculated
                     `"${config.ocrTokens || ''}"`,
                     `"${config.classificationTokens || ''}"`,
                     `"${config.extractionTokens || ''}"`,
