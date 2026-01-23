@@ -35,18 +35,35 @@ const CapacityPlanningLayout = () => {
   // Function to fetch actual page counts from processed documents
   const fetchActualPageCounts = async () => {
     try {
-      // Use the documents from context which contains processed documents
-      if (!documents || documents.length === 0) {
-        console.log('📄 No processed documents found in context');
-        return {};
-      }
+      // Query the tracking table directly for processed documents with page counts
+      const query = `
+        query ListDocuments($limit: Int) {
+          listDocuments(limit: $limit) {
+            items {
+              documentId
+              inputKey
+              numberOfPages
+              documentType
+              status
+            }
+          }
+        }
+      `;
 
+      const result = await client.graphql({
+        query,
+        variables: { limit: 1000 },
+      });
+
+      const processedDocuments = result.data?.listDocuments?.items || [];
       const pageCountMap = {};
       const docTypeStats = {};
 
-      // Calculate average pages per document type from processed documents
-      documents.forEach((doc) => {
-        if (doc.numberOfPages && doc.documentType) {
+      console.log('📄 Found documents:', processedDocuments.length);
+
+      // Calculate average pages per document type from completed documents
+      processedDocuments.forEach((doc) => {
+        if (doc.numberOfPages && doc.documentType && doc.status === 'COMPLETED') {
           const docType = doc.documentType;
           const pages = parseInt(doc.numberOfPages, 10);
 
@@ -73,28 +90,27 @@ const CapacityPlanningLayout = () => {
     }
   };
 
-  // Auto-populate avgPages from processed documents
+  // Auto-populate avgPages from processed documents on component mount
   useEffect(() => {
     const populatePageCounts = async () => {
-      if (documents && documents.length > 0) {
-        const actualPageCounts = await fetchActualPageCounts();
+      const actualPageCounts = await fetchActualPageCounts();
 
-        if (Object.keys(actualPageCounts).length > 0) {
-          const updatedConfigs = documentConfigs.map((config) => {
-            const actualPages = actualPageCounts[config.type];
-            if (actualPages && !config.avgPages) {
-              return { ...config, avgPages: actualPages };
-            }
-            return config;
-          });
+      if (Object.keys(actualPageCounts).length > 0) {
+        const updatedConfigs = documentConfigs.map((config) => {
+          const actualPages = actualPageCounts[config.type];
+          if (actualPages && !config.avgPages) {
+            return { ...config, avgPages: actualPages };
+          }
+          return config;
+        });
 
-          setDocumentConfigs(updatedConfigs);
-        }
+        setDocumentConfigs(updatedConfigs);
       }
     };
 
+    // Run once on component mount
     populatePageCounts();
-  }, [documents]); // Run when documents change
+  }, []); // Remove documents dependency
 
   const [documentConfigs, setDocumentConfigs] = useState([
     {
@@ -1310,21 +1326,21 @@ const CapacityPlanningLayout = () => {
                       {!item.avgPages && (
                         <div>
                           <div style={{ fontSize: '0.75em', color: '#d13212', marginTop: '2px' }}>Process documents to calculate</div>
-                          {documents && documents.length > 0 && (
-                            <Button
-                              variant="link"
-                              onClick={async () => {
-                                const actualPageCounts = await fetchActualPageCounts();
-                                const actualPages = actualPageCounts[item.type];
-                                if (actualPages) {
-                                  updateDocumentConfig(item.index, 'avgPages', actualPages);
-                                }
-                              }}
-                              style={{ fontSize: '0.75em', padding: '2px 0' }}
-                            >
-                              Calculate from processed docs
-                            </Button>
-                          )}
+                          <Button
+                            variant="link"
+                            onClick={async () => {
+                              const actualPageCounts = await fetchActualPageCounts();
+                              const actualPages = actualPageCounts[item.type];
+                              if (actualPages) {
+                                updateDocumentConfig(item.index, 'avgPages', actualPages);
+                              } else {
+                                console.log(`No page data found for document type: ${item.type}`);
+                              }
+                            }}
+                            style={{ fontSize: '0.75em', padding: '2px 0' }}
+                          >
+                            Calculate from processed docs
+                          </Button>
                         </div>
                       )}
                     </div>
