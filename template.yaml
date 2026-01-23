@@ -4902,7 +4902,8 @@ Resources:
           HIGH_COMPLEXITY_MULTIPLIER: "2.0"
           MEDIUM_COMPLEXITY_MULTIPLIER: "1.5"
           # Remove hardcoded defaults - use actual quota values only
-          MIN_TOKENS_PER_REQUEST: "1000"
+          # Make minimum configurable and more realistic for different patterns
+          MIN_TOKENS_PER_REQUEST: "500"  # Reduced from 1000 for better accuracy
           # Remove hardcoded defaults - use actual quota values only
           PEAK_DEMAND_MULTIPLIER: "4.6"
           PEAK_DURATION_MINUTES: "5.0"

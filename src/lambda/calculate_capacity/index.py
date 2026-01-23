@@ -5,10 +5,25 @@
 import json
 import os
 import time
+from decimal import Decimal
 from typing import Any, Dict
 
 import boto3
 from botocore.exceptions import ClientError
+
+
+def convert_decimal_to_float(obj):
+    """Convert DynamoDB Decimal types to Python float/int for JSON serialization and math operations."""
+    if isinstance(obj, Decimal):
+        # Convert to int if it's a whole number, otherwise float
+        if obj % 1 == 0:
+            return int(obj)
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_decimal_to_float(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_decimal_to_float(item) for item in obj]
+    return obj
 
 
 def retry_with_backoff(func, max_retries=3, base_delay=1):
@@ -427,19 +442,51 @@ def calculate_latency_distribution(
     if not bedrock_quota_rpm:
         raise ValueError("Bedrock RPM quotas not configured")
     
-    # Calculate effective processing capacity - no defaults
+    # Calculate effective processing capacity with realistic token estimation
     total_tokens = sum(tokens_per_hour.values()) if isinstance(tokens_per_hour, dict) else tokens_per_hour
     min_tokens_per_request = int(os.environ["MIN_TOKENS_PER_REQUEST"])
-    avg_tokens_per_request = max(total_tokens / max(docs_per_hour, 1), min_tokens_per_request)
     
-    # Capacity limited by either tokens or requests
+    # Calculate actual average tokens per request
+    actual_avg_tokens = total_tokens / max(docs_per_hour, 1) if docs_per_hour > 0 else 0
+    
+    # Use actual tokens if reasonable, otherwise use minimum for safety
+    if actual_avg_tokens >= min_tokens_per_request:
+        avg_tokens_per_request = actual_avg_tokens
+        print(f"🔍 Using actual token average: {actual_avg_tokens:.0f} tokens/request")
+    else:
+        avg_tokens_per_request = min_tokens_per_request
+        print(f"⚠️ Using minimum token safety: {min_tokens_per_request} tokens/request (actual: {actual_avg_tokens:.0f})")
+        
+    # Add warning if using minimum significantly differs from actual
+    if actual_avg_tokens > 0 and actual_avg_tokens < min_tokens_per_request * 0.5:
+        print(f"⚠️ WARNING: Document tokens ({actual_avg_tokens:.0f}) much lower than minimum ({min_tokens_per_request}). Consider reviewing document configuration.")
+    
+    # Capacity limited by either tokens or requests with realistic calculations
     token_limited_capacity = bedrock_quota_tpm / avg_tokens_per_request  # docs/min
     request_limited_capacity = min(bedrock_quota_rpm.values()) if bedrock_quota_rpm else 0
     
     effective_capacity = min(token_limited_capacity, request_limited_capacity)
     
-    # Convert hourly demand to per-minute
+    print(f"🔍 Capacity Analysis:")
+    print(f"  - Token-limited capacity: {token_limited_capacity:.1f} docs/min ({bedrock_quota_tpm} TPM ÷ {avg_tokens_per_request:.0f} tokens)")
+    print(f"  - Request-limited capacity: {request_limited_capacity:.1f} docs/min")
+    print(f"  - Effective capacity: {effective_capacity:.1f} docs/min")
+    
+    # Convert hourly demand to per-minute with validation
     docs_per_minute = docs_per_hour / 60
+    
+    if docs_per_minute <= 0:
+        print("⚠️ WARNING: No document processing demand configured")
+        return {
+            "p50": "0s", "p75": "0s", "p90": "0s", "p95": "0s", "p99": "0s",
+            "maxAllowed": f"{max_allowed_minutes * 60:.1f}s",
+            "baseLatency": "0s", "queueLatency": "0min", "totalLatency": "0s",
+            "loadFactor": "0x", "complexityFactor": "1.0x", "varianceFactor": "1.0x",
+            "pattern": pattern, "exceedsLimit": False, "dataSource": "no_demand",
+            "processingRate": f"{effective_capacity:.0f} docs/min",
+            "demandRate": "0 docs/min", "quotaUtilization": "0%",
+            "warningMessage": "No processing demand configured"
+        }
     
     # Simple capacity check: if demand exceeds capacity, we get delays
     if docs_per_minute > effective_capacity:
@@ -671,20 +718,30 @@ def build_simple_quota_requirements(
             
             # Query recent metering data for this processing step
             response = table.scan(
-                FilterExpression=boto3.dynamodb.conditions.Attr('metering').exists()
+                FilterExpression=boto3.dynamodb.conditions.Attr('Metering').exists()
             )
             
             print(f"🔍 Found {len(response.get('Items', []))} metering records")
             
             # Debug: Show all metering keys
             for item in response.get('Items', []):
-                metering_data = item.get('metering', {})
+                metering_data = item.get('Metering', {})
+                if isinstance(metering_data, str):
+                    import json as json_module
+                    metering_data = json_module.loads(metering_data)
+                # Convert Decimal types to float/int
+                metering_data = convert_decimal_to_float(metering_data)
                 print(f"🔍 Metering keys: {list(metering_data.keys())}")
                 break  # Just show first record
             
             # Sum up requests from metering data
             for item in response.get('Items', []):
-                metering_data = item.get('metering', {})
+                metering_data = item.get('Metering', {})
+                if isinstance(metering_data, str):
+                    import json as json_module
+                    metering_data = json_module.loads(metering_data)
+                # Convert Decimal types to float/int for math operations
+                metering_data = convert_decimal_to_float(metering_data)
                 for key, value in metering_data.items():
                     print(f"🔍 Checking key: {key} for step: {step_name}")
                     # Look for bedrock entries that match the processing step
