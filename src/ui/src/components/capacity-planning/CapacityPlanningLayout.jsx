@@ -35,16 +35,17 @@ const CapacityPlanningLayout = () => {
   // Function to fetch actual page counts from processed documents
   const fetchActualPageCounts = async () => {
     try {
-      // Query the tracking table directly for processed documents with page counts
+      // Query all documents from the tracking table including OCR results
       const query = `
         query ListDocuments($limit: Int) {
           listDocuments(limit: $limit) {
             items {
               documentId
               inputKey
-              numberOfPages
               documentType
               status
+              extractionResults
+              ocrResults
             }
           }
         }
@@ -59,20 +60,59 @@ const CapacityPlanningLayout = () => {
       const pageCountMap = {};
       const docTypeStats = {};
 
-      console.log('📄 Found documents:', processedDocuments.length);
+      console.log('📄 Found documents for page analysis:', processedDocuments.length);
 
-      // Calculate average pages per document type from completed documents
+      // Extract page counts from OCR or extraction results
       processedDocuments.forEach((doc) => {
-        if (doc.numberOfPages && doc.documentType && doc.status === 'COMPLETED') {
-          const docType = doc.documentType;
-          const pages = parseInt(doc.numberOfPages, 10);
+        if (doc.status === 'COMPLETED' && doc.documentType) {
+          let pageCount = null;
 
-          if (!docTypeStats[docType]) {
-            docTypeStats[docType] = { totalPages: 0, count: 0 };
+          // Try to extract page count from OCR results (Textract)
+          if (doc.ocrResults) {
+            try {
+              const ocrData = typeof doc.ocrResults === 'string' ? JSON.parse(doc.ocrResults) : doc.ocrResults;
+              if (ocrData.Blocks) {
+                // Count unique page numbers from Textract blocks
+                const pages = new Set();
+                ocrData.Blocks.forEach((block) => {
+                  if (block.Page) {
+                    pages.add(block.Page);
+                  }
+                });
+                pageCount = pages.size;
+              }
+            } catch (e) {
+              console.warn(`Failed to parse OCR results for ${doc.inputKey}:`, e);
+            }
           }
 
-          docTypeStats[docType].totalPages += pages;
-          docTypeStats[docType].count += 1;
+          // Try to extract from extraction results if OCR didn't work
+          if (!pageCount && doc.extractionResults) {
+            try {
+              const extractionData = typeof doc.extractionResults === 'string' ? JSON.parse(doc.extractionResults) : doc.extractionResults;
+              // Look for page indicators in extraction results
+              if (extractionData.pages) {
+                pageCount = extractionData.pages.length;
+              } else if (extractionData.numberOfPages) {
+                pageCount = parseInt(extractionData.numberOfPages, 10);
+              }
+            } catch (e) {
+              console.warn(`Failed to parse extraction results for ${doc.inputKey}:`, e);
+            }
+          }
+
+          if (pageCount && pageCount > 0) {
+            const docType = doc.documentType;
+
+            if (!docTypeStats[docType]) {
+              docTypeStats[docType] = { totalPages: 0, count: 0 };
+            }
+
+            docTypeStats[docType].totalPages += pageCount;
+            docTypeStats[docType].count += 1;
+
+            console.log(`📄 Found ${pageCount} pages for ${doc.inputKey} (${docType})`);
+          }
         }
       });
 
@@ -82,10 +122,10 @@ const CapacityPlanningLayout = () => {
         pageCountMap[docType] = (stats.totalPages / stats.count).toFixed(1);
       });
 
-      console.log('📄 Calculated page counts from processed documents:', pageCountMap);
+      console.log('📄 Calculated page counts from actual documents:', pageCountMap);
       return pageCountMap;
     } catch (error) {
-      console.warn('Could not fetch actual page counts from processed documents:', error);
+      console.error('Error fetching actual page counts:', error);
       return {};
     }
   };
@@ -1326,31 +1366,24 @@ const CapacityPlanningLayout = () => {
                       {!item.avgPages && (
                         <div>
                           <div style={{ fontSize: '0.75em', color: '#d13212', marginTop: '2px' }}>
-                            Enter average pages per document
+                            Calculate from processed documents
                           </div>
-                          <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
-                            <Button
-                              variant="link"
-                              onClick={() => updateDocumentConfig(item.index, 'avgPages', '1')}
-                              style={{ fontSize: '0.75em', padding: '2px 4px' }}
-                            >
-                              1 page
-                            </Button>
-                            <Button
-                              variant="link"
-                              onClick={() => updateDocumentConfig(item.index, 'avgPages', '2')}
-                              style={{ fontSize: '0.75em', padding: '2px 4px' }}
-                            >
-                              2 pages
-                            </Button>
-                            <Button
-                              variant="link"
-                              onClick={() => updateDocumentConfig(item.index, 'avgPages', '5')}
-                              style={{ fontSize: '0.75em', padding: '2px 4px' }}
-                            >
-                              5 pages
-                            </Button>
-                          </div>
+                          <Button
+                            variant="link"
+                            onClick={async () => {
+                              const actualPageCounts = await fetchActualPageCounts();
+                              const actualPages = actualPageCounts[item.type];
+                              if (actualPages) {
+                                updateDocumentConfig(item.index, 'avgPages', actualPages);
+                                console.log(`Set actual page count for ${item.type}: ${actualPages}`);
+                              } else {
+                                console.log(`No page data found for document type: ${item.type}`);
+                              }
+                            }}
+                            style={{ fontSize: '0.75em', padding: '2px 0' }}
+                          >
+                            Calculate from processed docs
+                          </Button>
                         </div>
                       )}
                     </div>
