@@ -20,119 +20,111 @@ The GenAI IDP accelerator includes comprehensive capacity planning capabilities 
 
 The capacity planning system consists of several integrated components that work together to provide comprehensive capacity analysis:
 
-![Capacity Planning Architecture](../images/capacity-planning-flow.png)
-
 ### Core Components
 
-1. **Capacity Calculation Engine**: Lambda-based processing engine that analyzes document requirements
-2. **Concurrency Management**: DynamoDB-based system for tracking and controlling parallel executions
-3. **Web UI Interface**: Interactive capacity planning calculator and visualization dashboard
-4. **Monitoring Integration**: Real-time metrics collection and performance tracking
-5. **Quota Analysis**: Automated AWS service quota requirement calculation
+1. **GraphQL Resolver**: `CalculateCapacityResolverFunction` that handles capacity calculation requests
+2. **Capacity Calculation Engine**: Lambda-based processing engine that analyzes document requirements and generates recommendations
+3. **Web UI Interface**: Interactive React-based capacity planning calculator with real-time visualizations
+4. **Token Usage Analysis**: Automatic population of token usage from processed documents' metering data
+5. **Quota Analysis**: Automated AWS service quota requirement calculation with direct links to AWS console
+6. **Latency Distribution Modeling**: Statistical analysis of processing times with percentile-based predictions
 
 ### Data Flow
 
-1. **Input Configuration**: Users define document types, volumes, and processing requirements
-2. **Historical Analysis**: System analyzes past processing data for baseline metrics
-3. **Capacity Calculation**: Engine processes requirements and generates capacity recommendations
-4. **Quota Assessment**: System calculates required AWS service quotas
-5. **Visualization**: Results displayed through interactive dashboard with actionable insights
+1. **Input Configuration**: Users define document types, token usage, and processing schedules through the Web UI
+2. **Historical Analysis**: System extracts token usage from processed documents' metering data
+3. **Capacity Calculation**: GraphQL resolver invokes calculation engine to process requirements
+4. **Response Sanitization**: Results are sanitized to match GraphQL schema before returning to UI
+5. **Quota Assessment**: System calculates required AWS service quotas with direct console links
+6. **Visualization**: Results displayed through interactive dashboard with hourly token distribution charts
 
 ## Capacity Planning Features
 
 ### 1. Interactive Capacity Calculator
 
-The Web UI provides an intuitive interface for capacity planning:
+The Web UI provides an intuitive interface for capacity planning with real-time token usage population:
 
 **Document Configuration**:
-- Document type selection and custom type definition
-- Token usage estimation per processing stage
-- Page count and complexity factor configuration
-- Processing pattern selection (Pattern 1, 2, or 3)
+- Document type selection from configured classes or add custom types
+- Average pages per document (can be manually entered or automatically populated from processed documents' metering data)
+- Token usage configuration for each processing step (OCR, Classification, Extraction, Assessment, Summarization)
+- Support for automatic token and page count population from processed documents' metering data
+- CSV import/export functionality for bulk configuration
 
-**Load Distribution Planning**:
-- Hourly processing schedule configuration
-- Peak load time identification
-- Document volume distribution across time slots
-- Maximum latency requirement settings
+**Processing Schedule Configuration**:
+- Hourly processing schedule with document type and volume specification
+- Visual time slot selection (24-hour format)
+- Document type filtering based on configured types
+- CSV import/export for schedule management
 
-**Real-time Calculations**:
+**Real-time Token Analysis**:
+- Hourly token distribution visualization with stacked bar charts
+- Peak hour analysis with load distribution insights
 - Processing time percentile analysis (P50, P75, P90, P95, P99)
-- Throughput capacity requirements
-- Resource utilization projections
-- Cost estimation based on processing volumes
+- Latency distribution modeling with SLA compliance checking
 
 ### 2. Advanced Analytics Engine
 
-The capacity calculation engine provides sophisticated analysis capabilities:
+The capacity calculation system provides sophisticated analysis through GraphQL resolvers:
 
-**Processing Time Analysis**:
-```json
-{
-  "pattern-1": {"summarization": 45.0},
-  "pattern-2": {
-    "ocr": 8.0,
-    "classification": 3.5, 
-    "extraction": 12.0,
-    "assessment": 5.0,
-    "summarization": 8.0
-  },
-  "pattern-3": {
-    "ocr": 8.0,
-    "classification": 2.0,
-    "extraction": 12.0, 
-    "assessment": 5.0,
-    "summarization": 8.0
-  }
-}
-```
+**Token Usage Extraction**:
+- Automatic extraction from processed documents' metering data
+- Context-aware parsing of OCR, classification, extraction, assessment, and summarization tokens
+- Request count estimation based on token chunking patterns
+- Page count extraction from OCR processing data
 
 **Latency Distribution Modeling**:
-- Statistical analysis of processing times
-- Percentile-based performance predictions
-- Variance factor calculations for load planning
-- Complexity-based processing time adjustments
+- Statistical analysis of processing times with percentile calculations
+- Queue delay modeling based on processing volume and AWS service quotas
+- SLA compliance checking against configured maximum latency
+- Performance warning alerts for quota limit exceedances
 
-**Load Factor Analysis**:
-- System load vs. capacity calculations
-- Bottleneck identification and resolution recommendations
-- Adaptive scaling suggestions based on processing patterns
-- Performance optimization guidance
+**Response Sanitization**:
+- GraphQL schema compliance validation
+- Error handling with structured error responses
+- Field sanitization to prevent null responses from AppSync
+- Comprehensive logging for debugging and monitoring
 
-### 3. Concurrency Management System
+### 3. Document Token Usage Population
 
-**Dynamic Concurrency Control**:
-- Real-time tracking of active workflow executions
-- Configurable maximum concurrent workflow limits
-- Automatic backpressure management during peak loads
-- Queue depth monitoring and optimization
+**Automatic Token Population from Processed Documents**:
+- Integration with Documents context to access processed document data
+- Extraction of token usage from metering data structure
+- Support for multiple document selection and batch population
+- Document picker modal with filtering and selection capabilities
 
-**ConcurrencyTable (DynamoDB)**:
-- Atomic increment/decrement operations for workflow tracking
-- Initialized with `workflow_counter` starting at 0
-- Provides thread-safe concurrency management
-- Supports high-throughput document processing
+**Metering Data Processing**:
+- Context-prefixed key parsing (OCR/, Classification/, Extraction/, Assessment/, Summarization/, BDAProject/bda/)
+- Token count aggregation from inputTokens, outputTokens, and totalTokens fields
+- Request count estimation based on token chunking patterns using `VITE_DEFAULT_MAX_TOKENS_PER_REQUEST`
+- Page count extraction from OCR Bedrock requests (using `metrics.requests` as page count)
+- BDA pattern support with page-based token estimation using `VITE_BDA_TOKENS_PER_PAGE`
 
-**Queue Management**:
-- SQS-based document processing queue
-- Intelligent message batching for optimal throughput
-- Visibility timeout management (30 seconds default)
-- Dead letter queue handling for failed processing
+**Token Usage Validation**:
+- Required OCR token validation for Bedrock OCR configurations
+- Document type matching and configuration merging
+- Empty configuration filtering and cleanup
+- CSV import/export with validation and error handling
 
 ### 4. AWS Service Quota Analysis
 
 **Automated Quota Calculation**:
-- Bedrock model invocation limits
-- Lambda concurrent execution requirements
-- Step Functions execution quotas
-- DynamoDB read/write capacity units
-- S3 request rate limits
+- Dynamic model configuration from deployment settings
+- Bedrock model invocation limits calculation based on token usage
+- Tokens Per Minute (TPM) quota requirements for each model
+- Regional quota availability analysis with direct console links
 
-**Quota Recommendations**:
-- Service-specific quota increase suggestions
-- Buffer percentage calculations (default 20%)
-- Regional quota availability analysis
-- Cost impact assessment for quota increases
+**Quota Requirements Display**:
+- Service-specific quota increase suggestions with model details
+- Current vs. required quota comparison with utilization percentages
+- Status indicators (✓ Sufficient, ⚠️ Increase Needed)
+- Direct links to AWS Service Quotas console for quota requests
+
+**Environment Configuration Support**:
+- `VITE_BEDROCK_MODEL_QUOTA_CODES`: Optional mapping of model IDs to quota codes (not configured by default)
+- `VITE_AWS_REGION`: Regional console URL generation (required)
+- Fallback to generic Bedrock quotas page when `VITE_BEDROCK_MODEL_QUOTA_CODES` is missing
+- Support for multiple AWS regions through `VITE_AWS_REGION` configuration
 
 ## Configuration and Customization
 
@@ -152,17 +144,21 @@ The capacity calculation engine provides sophisticated analysis capabilities:
 
 ### Environment Variables
 
-**Calculation Parameters**:
-- `PROCESSING_VARIANCE_FACTOR`: Processing time variance (default: 1.5)
-- `BASE_LOAD_FACTOR`: Base system load multiplier (default: 1.2)
-- `BEDROCK_LOAD_THRESHOLD`: Bedrock utilization threshold (default: 0.7)
-- `LATENCY_SAFETY_FACTOR`: Latency calculation safety margin (default: 0.9)
+**UI Configuration Parameters**:
+- `VITE_DEFAULT_MAX_LATENCY`: Default maximum latency setting (15 minutes)
+- `VITE_LATENCY_OPTIONS`: JSON array of available latency options [5, 15, 30, 60]
+- `VITE_DEFAULT_TOKENS_BY_STEP`: JSON object with default token limits per processing step (OCR:4000, Classification:2000, Extraction:8000, Assessment:4000, Summarization:4000, default:4000)
+- `VITE_DEFAULT_MAX_TOKENS_PER_REQUEST`: Default maximum tokens per API request (4000)
+- `VITE_BDA_TOKENS_PER_PAGE`: Estimated tokens per page for BDA pattern processing (2000)
 
-**Recommendation Thresholds**:
-- `RECOMMENDATION_HIGH_COMPLEXITY_THRESHOLD`: High complexity threshold (default: 2.5)
-- `RECOMMENDATION_MEDIUM_COMPLEXITY_THRESHOLD`: Medium complexity threshold (default: 1.5)
-- `RECOMMENDATION_HIGH_LOAD_THRESHOLD`: High load threshold (default: 3.0)
-- `RECOMMENDATION_MEDIUM_LOAD_THRESHOLD`: Medium load threshold (default: 2.0)
+**AWS Service Integration**:
+- `VITE_AWS_REGION`: AWS region for console URL generation (e.g., us-east-1)
+- `VITE_BEDROCK_MODEL_QUOTA_CODES`: Optional JSON mapping of Bedrock model IDs to quota codes (not configured by default)
+- `CALCULATE_CAPACITY_FUNCTION_NAME`: Lambda function name for capacity calculations (set by CloudFormation)
+
+**Token Usage Configuration**:
+- Token chunking estimation for request count calculations based on `VITE_DEFAULT_MAX_TOKENS_PER_REQUEST`
+- Model-specific token usage patterns extracted from processed documents' metering data
 
 ### Pattern-Specific Configuration
 
@@ -190,205 +186,231 @@ The capacity calculation engine provides sophisticated analysis capabilities:
 
 Navigate to the Web UI and select the "Capacity Planning" section:
 
-1. **Login**: Use your Cognito credentials to access the Web UI
-2. **Navigate**: Click on "Capacity Planning" in the main navigation
-3. **Configure**: Set up your document processing requirements
-4. **Calculate**: Run capacity analysis and review recommendations
+1. **Prerequisites**: Ensure you have processed some documents first to populate token usage data
+2. **Configuration**: Visit "View/Edit Configuration" tab to load your pattern configuration
+3. **Navigation**: Click on "Capacity Planning" in the main navigation
+4. **Pattern Detection**: System automatically detects your deployment pattern (Pattern 1, 2, or 3)
 
 ### 2. Document Configuration
 
 **Step 1: Document Type Setup**
+- Select document types from configured classes or add custom types
+- Use "Populate tokens from Documents" to automatically extract token usage from processed documents
+- Configure average pages per document (extracted from actual processing data)
+- Set token usage for each processing step (OCR, Classification, Extraction, Assessment, Summarization)
+
+**Step 2: Token Population from Processed Documents**
 ```javascript
-// Example document configuration
+// Example of automatic token extraction from metering data
 {
-  "documentType": "invoice",
-  "averagePages": 3,
-  "complexityFactor": 1.2,
-  "expectedTokens": {
-    "ocr": 1500,
-    "classification": 200,
-    "extraction": 800
+  "OCR/bedrock/us.amazon.nova-lite-v1:0": {
+    "totalTokens": 1500,
+    "requests": 3,
+    "pages": 3
+  },
+  "Classification/bedrock/anthropic.claude-3-haiku": {
+    "inputTokens": 800,
+    "outputTokens": 200
+  },
+  "BDAProject/bda/project-id": {
+    "pages": 5,
+    // Tokens calculated as: pages * VITE_BDA_TOKENS_PER_PAGE (2000)
   }
 }
 ```
 
-**Step 2: Processing Schedule**
-- Define hourly processing volumes
-- Set peak processing times
-- Configure maximum acceptable latency
-- Specify processing pattern requirements
+**Step 3: CSV Import/Export**
+- Import document configurations from CSV files
+- Export current configurations for backup or sharing
+- Validation for required OCR tokens when Bedrock OCR is configured
 
-**Step 3: Analysis Parameters**
-- Select latency percentile requirements (P90, P95, P99)
-- Configure load distribution preferences
-- Set cost optimization priorities
-- Define scaling preferences
+### 3. Processing Schedule Configuration
 
-### 3. Interpreting Results
+**Hourly Processing Schedule**:
+- Configure processing volumes by hour using 24-hour time slots
+- Select document types from configured types only
+- Specify documents per hour for each time slot and document type
+- Visual time slot selection with hour range display (e.g., "09:00 - 10:00")
 
-**Processing Metrics**:
-- **Throughput**: Documents processed per hour
-- **Latency**: Processing time percentiles
-- **Utilization**: Resource usage percentages
-- **Bottlenecks**: Identified performance constraints
+**Schedule Management**:
+- Add multiple time slots for different processing periods
+- Remove time slots that are no longer needed (minimum one slot required)
+- CSV import/export for bulk schedule management
+- Validation to ensure only configured document types are used
 
-**Quota Requirements**:
-- **Bedrock**: Model invocation limits needed
-- **Lambda**: Concurrent execution requirements
-- **Step Functions**: Workflow execution quotas
-- **Storage**: S3 and DynamoDB capacity needs
+**Maximum Latency Configuration**:
+- Select from predefined latency options: 5, 15, 30, or 60 minutes
+- Default setting is typically 15 minutes
+- Used for SLA compliance checking and performance validation
+- Used for SLA compliance checking and performance validation
 
-**Recommendations**:
-- **Scaling**: Resource scaling suggestions
-- **Optimization**: Performance improvement opportunities
-- **Cost**: Cost optimization recommendations
-- **Architecture**: Architectural enhancement suggestions
+### 4. Capacity Calculation and Results
 
-### 4. Implementation Planning
+**Running Capacity Analysis**:
+- Click "Calculate Capacity Requirements" to perform analysis
+- System validates configuration and processes requirements
+- GraphQL resolver invokes capacity calculation Lambda function
+- Results are sanitized and returned to the UI
 
-**Phase 1: Baseline Establishment**
-1. Run capacity analysis with current document volumes
-2. Identify existing bottlenecks and constraints
-3. Establish performance baselines and metrics
-4. Document current AWS service quota utilization
+**Capacity Metrics Display**:
+- **Total Docs**: Aggregate documents per hour across all time slots
+- **Total Pages**: Calculated from document volumes and average pages
+- **Total Tokens**: Aggregated token usage across all processing steps (displayed in millions)
 
-**Phase 2: Scaling Preparation**
-1. Request necessary AWS service quota increases
-2. Configure monitoring and alerting thresholds
-3. Implement recommended architectural optimizations
-4. Test scaling scenarios with synthetic workloads
+**Latency Distribution Analysis**:
+- Processing time percentiles (P50, P75, P90, P95, P99)
+- Base processing time vs. queue delay breakdown
+- SLA compliance checking against maximum allowed latency
+- Performance warnings for quota limit exceedances
 
-**Phase 3: Production Scaling**
-1. Gradually increase document processing volumes
-2. Monitor performance metrics and capacity utilization
-3. Adjust configurations based on real-world performance
-4. Implement automated scaling policies as needed
+**Hourly Token Distribution Visualization**:
+- Stacked bar chart showing token usage by hour and processing step
+- Color-coded by processing type (OCR, Classification, Extraction, Assessment, Summarization)
+- Peak hour analysis with load distribution insights
+- Interactive tooltips with detailed token counts
 
-## Monitoring and Optimization
+### 5. AWS Service Quota Management
 
-### Real-time Capacity Monitoring
+**Quota Requirements Analysis**:
+- Automatic calculation of required Bedrock model quotas (Tokens Per Minute)
+- Current vs. required quota comparison with utilization percentages
+- Status indicators: ✓ Sufficient, ⚠️ Increase Needed, or ⚠️ Check AWS Console
+- Model-specific quota requirements with step context (e.g., "claude-3-haiku (Classification)")
 
-**CloudWatch Integration**:
-- Concurrent workflow execution tracking
-- Queue depth and processing rate monitoring
-- Service-specific latency and throughput metrics
-- Error rate and retry pattern analysis
+**Direct AWS Console Integration**:
+- "Request Increase" buttons that open AWS Service Quotas console
+- Region-specific console URLs using configured AWS region
+- Model-specific quota code mapping for direct navigation
+- Fallback to generic Bedrock quotas page when configuration is missing
 
-**Dashboard Metrics**:
-- **Capacity Utilization**: Current vs. maximum capacity usage
-- **Processing Latency**: Real-time latency percentiles
-- **Queue Health**: Message processing rates and backlogs
-- **Resource Usage**: AWS service utilization percentages
-
-### Performance Optimization
-
-**Bottleneck Identification**:
-- Processing stage analysis for performance constraints
-- Resource utilization pattern identification
-- Queue depth and processing rate correlation
-- Service-specific performance optimization opportunities
-
-**Optimization Strategies**:
-- **Parallel Processing**: Increase concurrent workflow limits
-- **Batch Optimization**: Adjust message batching parameters
-- **Resource Scaling**: Scale Lambda memory and timeout settings
-- **Model Selection**: Optimize Bedrock model choices for performance vs. cost
-
-### Cost Optimization
-
-**Cost Analysis Features**:
-- Processing cost per document calculation
-- Service-specific cost breakdown and optimization
-- Volume-based pricing tier recommendations
-- Reserved capacity vs. on-demand cost analysis
-
-**Cost Optimization Recommendations**:
-- **Right-sizing**: Optimize Lambda memory and timeout configurations
-- **Model Selection**: Balance model performance with cost considerations
-- **Scheduling**: Distribute processing to optimize cost efficiency
-- **Retention**: Optimize data retention policies for cost management
+**Quota Request Generation**:
+- "Generate AWS Support Request" button for comprehensive quota increases
+- Automatic filtering of quotas that need increases
+- Direct links to AWS Service Quotas console or Support Center
+- Export functionality for quota requirements documentation
 
 ## Advanced Features
 
-### 1. Predictive Scaling
+### 1. Token Usage Analysis and Visualization
 
-**Machine Learning Integration**:
-- Historical processing pattern analysis
-- Seasonal workload prediction
-- Automated scaling recommendation generation
-- Proactive capacity planning based on trends
+**Hourly Token Distribution Chart**:
+- Interactive stacked bar chart showing token usage by hour
+- Color-coded by processing step (OCR: Purple, Classification: Orange, Extraction: Green, Assessment: Blue, Summarization: Red)
+- Dynamic scaling based on peak token usage
+- Hover tooltips with detailed token counts per step
 
-**Adaptive Recommendations**:
-- Dynamic threshold adjustment based on performance data
-- Context-aware optimization suggestions
-- Workload-specific configuration recommendations
-- Performance trend-based capacity planning
+**Peak Hour Analysis**:
+- Automatic identification of peak processing hours
+- Peak vs. average load comparison with percentage differences
+- Peak inference type identification (which step uses most tokens)
+- Load distribution insights across active processing hours
 
-### 2. Multi-Pattern Optimization
+**Token Extraction from Metering Data**:
+- Context-aware parsing of metering data structure
+- Support for different metering key formats (OCR/, Classification/, Extraction/, etc.)
+- Request count estimation based on token chunking patterns
+- Page count extraction from OCR Bedrock requests
 
-**Cross-Pattern Analysis**:
-- Comparative performance analysis across processing patterns
-- Pattern selection recommendations based on document characteristics
-- Resource sharing optimization between patterns
-- Unified capacity planning across multiple patterns
+### 2. Pattern-Specific Configuration
 
-**Pattern-Specific Optimizations**:
-- **Pattern 1**: BDA-specific capacity planning and optimization
-- **Pattern 2**: OCR and extraction pipeline optimization
-- **Pattern 3**: UDOP classification and multi-stage processing optimization
+**Pattern Detection and Override**:
+- Automatic pattern detection from deployment settings (`IDPPattern`)
+- Manual pattern override capability for testing different configurations
+- Pattern-specific token usage and processing step configuration
+- Visual pattern indicator with deployment information display
 
-### 3. Integration Capabilities
+**Pattern 1 (BDA) Support**:
+- Simplified token analysis focused on summarization processing only
+- BDA-specific token estimation using `VITE_BDA_TOKENS_PER_PAGE` (2000 tokens per page)
+- Page-based token calculation for packet and media documents from `BDAProject/bda/` metering keys
+- Limited quota analysis due to BDA processing model (only summarization step)
 
-**API Integration**:
-- GraphQL API for programmatic capacity planning
-- REST endpoints for external system integration
-- Webhook support for real-time capacity notifications
-- CLI integration for automated capacity management
+**Pattern 2 & 3 Comprehensive Support**:
+- Full processing pipeline analysis (OCR, Classification, Extraction, Assessment, Summarization)
+- Bedrock OCR token validation when configured
+- UDOP classification support for Pattern 3
+- Complete latency distribution modeling and quota analysis
 
-**External System Integration**:
-- CI/CD pipeline integration for automated capacity testing
-- Monitoring system integration for alerting and notifications
-- Cost management system integration for budget tracking
-- Workflow orchestration system integration for automated scaling
+### 3. Data Import/Export and Integration
+
+**CSV Import/Export Functionality**:
+- Document configuration CSV import with validation
+- Processing schedule CSV import/export
+- Capacity plan export with comprehensive metrics
+- Quota requirements export for documentation and planning
+
+**Document Context Integration**:
+- Integration with Documents context for processed document access
+- Automatic document filtering by completion status
+- Document picker modal with multi-select capability
+- Real-time document data validation and error handling
+
+**Configuration Integration**:
+- Dynamic model configuration from "View/Edit Configuration"
+- Real-time configuration updates without page refresh
+- Pattern-specific model display in token configuration tables
+- Environment variable-based configuration management
 
 ## Troubleshooting and Best Practices
 
 ### Common Issues and Solutions
 
-**High Latency Issues**:
-- **Symptom**: Processing times exceed expected latency percentiles
-- **Diagnosis**: Check concurrent workflow limits and queue depth
-- **Solution**: Increase `MaxConcurrentWorkflows` or optimize processing stages
+**Configuration Not Loaded**:
+- **Symptom**: Warning message "Configuration not loaded"
+- **Diagnosis**: Pattern configuration not available from "View/Edit Configuration"
+- **Solution**: Visit "View/Edit Configuration" tab first to load pattern configuration
 
-**Capacity Underutilization**:
-- **Symptom**: Low resource utilization despite high processing volumes
-- **Diagnosis**: Analyze bottlenecks in processing pipeline
-- **Solution**: Optimize batch sizes and parallel processing configuration
+**No Documents Available for Token Population**:
+- **Symptom**: Alert "No documents available. Please visit the Documents tab first"
+- **Diagnosis**: Documents context not loaded or no processed documents
+- **Solution**: Visit Documents tab to load document data, then return to Capacity Planning
 
-**Quota Limit Errors**:
-- **Symptom**: AWS service quota exceeded errors
-- **Diagnosis**: Review quota usage and increase requirements
-- **Solution**: Request quota increases based on capacity planning recommendations
+**Missing OCR Tokens Validation Error**:
+- **Symptom**: "OCR tokens are required for all document types when Bedrock OCR is configured"
+- **Diagnosis**: Bedrock OCR is configured but OCR token values are missing
+- **Solution**: Populate OCR tokens from processed documents or manually enter values
+
+**Empty Quota Requirements**:
+- **Symptom**: "No quota requirements found" with debug information
+- **Diagnosis**: No token usage configured or calculation returned empty results
+- **Solution**: Configure document processing with token values and ensure processing schedule has volumes > 0
+
+**Missing Environment Variable Configuration**:
+- **Symptom**: Warning messages about missing environment variables (e.g., `VITE_BDA_TOKENS_PER_PAGE`, `VITE_LATENCY_OPTIONS`)
+- **Diagnosis**: Required environment variables not configured in `.env` file
+- **Solution**: Configure missing environment variables with appropriate values
+
+**VITE_BEDROCK_MODEL_QUOTA_CODES Not Configured**:
+- **Symptom**: "Request Increase" buttons open generic Bedrock quotas page instead of specific quota
+- **Diagnosis**: `VITE_BEDROCK_MODEL_QUOTA_CODES` environment variable not configured (this is normal)
+- **Solution**: This is expected behavior - manually navigate to specific quotas in AWS console
 
 ### Best Practices
 
-**Capacity Planning**:
-- Run capacity analysis regularly to account for changing workloads
-- Use historical data to establish accurate baseline metrics
-- Plan for peak processing periods with appropriate buffer capacity
-- Monitor and adjust configurations based on real-world performance
+**Capacity Planning Workflow**:
+1. **Prerequisites**: Process sample documents first to generate metering data
+2. **Configuration**: Load pattern configuration via "View/Edit Configuration"
+3. **Token Population**: Use "Populate tokens from Documents" for accurate token usage
+4. **Schedule Configuration**: Define realistic processing schedules based on business requirements
+5. **Validation**: Run capacity calculations to identify quota requirements and performance issues
+
+**Token Usage Management**:
+- Use actual processed documents for token population rather than estimates
+- Validate OCR token requirements when Bedrock OCR is configured
+- Export configurations as CSV for backup and version control
+- Monitor token usage patterns and adjust configurations as processing evolves
+
+**Quota Management**:
+- Request quota increases proactively based on capacity analysis
+- Use direct AWS console links for efficient quota management
+- Monitor quota utilization percentages to avoid service limits
+- Document quota requirements for compliance and planning purposes
 
 **Performance Optimization**:
-- Implement gradual scaling to identify optimal configurations
-- Use A/B testing for configuration changes and optimizations
-- Monitor cost implications of performance optimization changes
-- Document configuration changes and their performance impact
-
-**Monitoring and Alerting**:
-- Set up proactive alerting for capacity threshold breaches
-- Monitor trends in processing latency and throughput
-- Track cost metrics alongside performance metrics
-- Implement automated responses to common capacity issues
+- Analyze peak hour token distribution to optimize processing schedules
+- Monitor latency distribution percentiles against SLA requirements
+- Use pattern-specific optimizations based on deployment configuration
+- Export capacity plans for stakeholder review and approval
 
 ## Integration with Other Features
 

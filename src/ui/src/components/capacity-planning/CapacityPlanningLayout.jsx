@@ -1959,7 +1959,7 @@ const CapacityPlanningLayout = () => {
                                     const quotaCodesConfig = import.meta.env.VITE_BEDROCK_MODEL_QUOTA_CODES;
                                     if (!quotaCodesConfig) {
                                       // Open generic Bedrock quotas page when config is missing
-                                      const region = import.meta.env.VITE_AWS_REGION || 'us-east-1';
+                                      const region = import.meta.env.VITE_AWS_REGION;
                                       const serviceQuotasUrl = `https://${region}.console.aws.amazon.com/servicequotas/home/services/bedrock/quotas`;
                                       window.open(serviceQuotasUrl, '_blank');
                                       return;
@@ -1969,7 +1969,7 @@ const CapacityPlanningLayout = () => {
                                       quotaCodes = JSON.parse(quotaCodesConfig);
                                     } catch (e) {
                                       console.error('VITE_BEDROCK_MODEL_QUOTA_CODES contains invalid JSON');
-                                      const region = import.meta.env.VITE_AWS_REGION || 'us-east-1';
+                                      const region = import.meta.env.VITE_AWS_REGION;
                                       const serviceQuotasUrl = `https://${region}.console.aws.amazon.com/servicequotas/home/services/bedrock/quotas`;
                                       window.open(serviceQuotasUrl, '_blank');
                                       return;
