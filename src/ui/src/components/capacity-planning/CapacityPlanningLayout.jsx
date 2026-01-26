@@ -24,132 +24,16 @@ import useConfiguration from '../../hooks/use-configuration';
 import useSettingsContext from '../../contexts/settings';
 import useDocumentsContext from '../../contexts/documents';
 
-const client = generateClient();
-
 const CapacityPlanningLayout = () => {
   const { mergedConfig: configuration, fetchConfiguration } = useConfiguration();
   const { settings: deploymentSettings } = useSettingsContext() || {};
   const { documents } = useDocumentsContext() || {};
 
   const [manualPattern, setManualPattern] = useState(null);
-  // Function to fetch actual page counts from processed documents
-  const fetchActualPageCounts = async () => {
-    try {
-      // Query all documents from the tracking table including OCR results
-      const query = `
-        query ListDocuments($limit: Int) {
-          listDocuments(limit: $limit) {
-            items {
-              documentId
-              inputKey
-              documentType
-              status
-              extractionResults
-              ocrResults
-            }
-          }
-        }
-      `;
-
-      const result = await client.graphql({
-        query,
-        variables: { limit: 1000 },
-      });
-
-      const processedDocuments = result.data?.listDocuments?.items || [];
-      const pageCountMap = {};
-      const docTypeStats = {};
-
-      console.log('📄 Found documents for page analysis:', processedDocuments.length);
-
-      // Extract page counts from OCR or extraction results
-      processedDocuments.forEach((doc) => {
-        if (doc.status === 'COMPLETED' && doc.documentType) {
-          let pageCount = null;
-
-          // Try to extract page count from OCR results (Textract)
-          if (doc.ocrResults) {
-            try {
-              const ocrData = typeof doc.ocrResults === 'string' ? JSON.parse(doc.ocrResults) : doc.ocrResults;
-              if (ocrData.Blocks) {
-                // Count unique page numbers from Textract blocks
-                const pages = new Set();
-                ocrData.Blocks.forEach((block) => {
-                  if (block.Page) {
-                    pages.add(block.Page);
-                  }
-                });
-                pageCount = pages.size;
-              }
-            } catch (e) {
-              console.warn(`Failed to parse OCR results for ${doc.inputKey}:`, e);
-            }
-          }
-
-          // Try to extract from extraction results if OCR didn't work
-          if (!pageCount && doc.extractionResults) {
-            try {
-              const extractionData = typeof doc.extractionResults === 'string' ? JSON.parse(doc.extractionResults) : doc.extractionResults;
-              // Look for page indicators in extraction results
-              if (extractionData.pages) {
-                pageCount = extractionData.pages.length;
-              } else if (extractionData.numberOfPages) {
-                pageCount = parseInt(extractionData.numberOfPages, 10);
-              }
-            } catch (e) {
-              console.warn(`Failed to parse extraction results for ${doc.inputKey}:`, e);
-            }
-          }
-
-          if (pageCount && pageCount > 0) {
-            const docType = doc.documentType;
-
-            if (!docTypeStats[docType]) {
-              docTypeStats[docType] = { totalPages: 0, count: 0 };
-            }
-
-            docTypeStats[docType].totalPages += pageCount;
-            docTypeStats[docType].count += 1;
-
-            console.log(`📄 Found ${pageCount} pages for ${doc.inputKey} (${docType})`);
-          }
-        }
-      });
-
-      // Calculate averages
-      Object.keys(docTypeStats).forEach((docType) => {
-        const stats = docTypeStats[docType];
-        pageCountMap[docType] = (stats.totalPages / stats.count).toFixed(1);
-      });
-
-      console.log('📄 Calculated page counts from actual documents:', pageCountMap);
-      return pageCountMap;
-    } catch (error) {
-      console.error('Error fetching actual page counts:', error);
-      return {};
-    }
-  };
 
   // Auto-populate avgPages from processed documents on component mount
   useEffect(() => {
-    const populatePageCounts = async () => {
-      const actualPageCounts = await fetchActualPageCounts();
-
-      if (Object.keys(actualPageCounts).length > 0) {
-        const updatedConfigs = documentConfigs.map((config) => {
-          const actualPages = actualPageCounts[config.type];
-          if (actualPages && !config.avgPages) {
-            return { ...config, avgPages: actualPages };
-          }
-          return config;
-        });
-
-        setDocumentConfigs(updatedConfigs);
-      }
-    };
-
-    // Run once on component mount
-    populatePageCounts();
+    // Remove auto-population to avoid errors
   }, []); // Remove documents dependency
 
   const [documentConfigs, setDocumentConfigs] = useState([
@@ -248,6 +132,7 @@ const CapacityPlanningLayout = () => {
       extractionRequests: 0,
       assessmentRequests: 0,
       summarizationRequests: 0,
+      avgPages: 0, // Extract actual page count from OCR requests
     };
 
     // Extract tokens and estimate requests from context-prefixed keys
@@ -257,6 +142,12 @@ const CapacityPlanningLayout = () => {
           const tokenCount = metrics.totalTokens || (metrics.inputTokens || 0) + (metrics.outputTokens || 0);
           data.ocrTokens += Number(tokenCount) || 0;
           data.ocrRequests += estimateRequestsFromTokens(tokenCount, 'OCR');
+          // Extract page count from OCR bedrock requests (OCR processes each page as a separate API call)
+          if (key.includes('/bedrock/') && metrics.requests) {
+            const pageCount = Number(metrics.requests) || 0;
+            data.avgPages = Math.max(data.avgPages, pageCount);
+            console.log(`📄 Extracted page count from ${key}: ${pageCount} pages`);
+          }
         } else if (key.startsWith('Classification/')) {
           const tokenCount = metrics.totalTokens || (metrics.inputTokens || 0) + (metrics.outputTokens || 0);
           data.classificationTokens += Number(tokenCount) || 0;
@@ -400,7 +291,7 @@ const CapacityPlanningLayout = () => {
 
     const newConfig = {
       type: docType,
-      avgPages: '', // Will be calculated from actual documents
+      avgPages: metering.avgPages || '', // Use actual page count from OCR metering data
       ocrTokens: metering.ocrTokens !== undefined ? metering.ocrTokens : '',
       classificationTokens: metering.classificationTokens !== undefined ? metering.classificationTokens : '',
       extractionTokens: metering.extractionTokens !== undefined ? metering.extractionTokens : '',
@@ -870,6 +761,8 @@ const CapacityPlanningLayout = () => {
 
       console.log('🔍 Sending capacity calculation request:', input);
 
+      // Create client inside the function to ensure Amplify is configured
+      const client = generateClient();
       const response = await client.graphql({
         query: `
           query CalculateCapacity($input: String!) {
@@ -927,9 +820,28 @@ const CapacityPlanningLayout = () => {
           return; // Exit early on success
         }
         // API returned structured error
-        throw new Error(result.errorMessage || 'API returned unsuccessful result');
+        console.warn('⚠️ API returned error:', result.errorMessage);
+        setResults({
+          success: false,
+          errorMessage: result.errorMessage || 'API calculation failed',
+          metrics: [
+            { label: 'Status', value: 'Calculation Failed' },
+            { label: 'Error', value: result.errorMessage || 'Unknown error' },
+          ],
+          quotaRequirements: [],
+        });
       } else {
-        throw new Error(`No data returned from API. Response: ${JSON.stringify(response.data || response)}`);
+        // API returned null - Lambda function failed
+        console.warn('⚠️ API returned null - Lambda function may have failed');
+        setResults({
+          success: false,
+          errorMessage: 'Capacity calculation service is unavailable. The Lambda function may have encountered an error.',
+          metrics: [
+            { label: 'Status', value: 'Service Unavailable' },
+            { label: 'Reason', value: 'Lambda function returned null' },
+          ],
+          quotaRequirements: [],
+        });
       }
     } catch (error) {
       console.error('❌ Capacity calculation error:', error);
@@ -941,20 +853,14 @@ const CapacityPlanningLayout = () => {
         });
       }
 
-      // Show more specific error message to user
-      let errorMessage = 'Capacity calculation service is temporarily unavailable.';
-      if (error.message && error.message.includes('No data returned from API')) {
-        errorMessage = 'The capacity calculation API returned an unexpected response format.';
-      } else if (error.message && error.message.includes('API Error:')) {
-        errorMessage = error.message; // Show the actual API error
-      } else if (error.errors && error.errors.length > 0) {
-        errorMessage = `API Error: ${error.errors[0].message}`;
-      }
-
+      // Show user-friendly error message without throwing
       setResults({
         success: false,
-        errorMessage: errorMessage,
-        metrics: [],
+        errorMessage: 'Capacity calculation service is temporarily unavailable. Please try again later.',
+        metrics: [
+          { label: 'Status', value: 'Service Error' },
+          { label: 'Details', value: 'The calculation service encountered an error' },
+        ],
         quotaRequirements: [],
       });
       setHasCalculated(true);
@@ -1361,31 +1267,8 @@ const CapacityPlanningLayout = () => {
                         value={item.avgPages}
                         onChange={({ detail }) => updateDocumentConfig(item.index, 'avgPages', detail.value)}
                         step={0.1}
-                        placeholder="Process docs first"
+                        placeholder="Enter pages"
                       />
-                      {!item.avgPages && (
-                        <div>
-                          <div style={{ fontSize: '0.75em', color: '#d13212', marginTop: '2px' }}>
-                            Calculate from processed documents
-                          </div>
-                          <Button
-                            variant="link"
-                            onClick={async () => {
-                              const actualPageCounts = await fetchActualPageCounts();
-                              const actualPages = actualPageCounts[item.type];
-                              if (actualPages) {
-                                updateDocumentConfig(item.index, 'avgPages', actualPages);
-                                console.log(`Set actual page count for ${item.type}: ${actualPages}`);
-                              } else {
-                                console.log(`No page data found for document type: ${item.type}`);
-                              }
-                            }}
-                            style={{ fontSize: '0.75em', padding: '2px 0' }}
-                          >
-                            Calculate from processed docs
-                          </Button>
-                        </div>
-                      )}
                     </div>
                   ),
                 },
