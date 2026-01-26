@@ -122,9 +122,9 @@ The capacity calculation system provides sophisticated analysis through GraphQL 
 
 **Environment Configuration Support**:
 - `VITE_BEDROCK_MODEL_QUOTA_CODES`: Optional mapping of model IDs to quota codes (not configured by default)
-- `VITE_AWS_REGION`: Regional console URL generation (required)
+- `VITE_AWS_REGION`: Regional console URL generation (required - no fallback)
 - Fallback to generic Bedrock quotas page when `VITE_BEDROCK_MODEL_QUOTA_CODES` is missing
-- Support for multiple AWS regions through `VITE_AWS_REGION` configuration
+- Support for multiple AWS regions through `VITE_AWS_REGION` configuration (must be explicitly set)
 
 ## Configuration and Customization
 
@@ -152,7 +152,7 @@ The capacity calculation system provides sophisticated analysis through GraphQL 
 - `VITE_BDA_TOKENS_PER_PAGE`: Estimated tokens per page for BDA pattern processing (2000)
 
 **AWS Service Integration**:
-- `VITE_AWS_REGION`: AWS region for console URL generation (e.g., us-east-1)
+- `VITE_AWS_REGION`: AWS region for console URL generation (required - no fallback)
 - `VITE_BEDROCK_MODEL_QUOTA_CODES`: Optional JSON mapping of Bedrock model IDs to quota codes (not configured by default)
 - `CALCULATE_CAPACITY_FUNCTION_NAME`: Lambda function name for capacity calculations (set by CloudFormation)
 
